@@ -1,0 +1,52 @@
+# Dois containers: app (API + front + coletor + noVNC) e db (Postgres). Dados no host:
+#   ./data/pg   -> banco
+#   ./data/app  -> XMLs crus, pasta de import, backups, perfil do navegador
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lattes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lattes}
+      POSTGRES_DB: ${POSTGRES_DB:-lattes}
+      TZ: America/Sao_Paulo
+      PGTZ: America/Sao_Paulo
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lattes} -d ${POSTGRES_DB:-lattes}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    shm_size: 256mb
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-lattes}:${POSTGRES_PASSWORD:-lattes}@db:5432/${POSTGRES_DB:-lattes}
+      NOVNC_URL: ${NOVNC_URL:-http://localhost:6080/vnc.html?autoconnect=true&resize=scale}
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
+      LATTES_DOWNLOAD_URL: ${LATTES_DOWNLOAD_URL:-}
+      CAPTCHA_TIMEOUT_MS: ${CAPTCHA_TIMEOUT_MS:-600000}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-lattes-devour/}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      AWS_REGION: ${AWS_REGION:-sa-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # O entrypoint vira este uid/gid, para os arquivos em ./data/app ficarem seus.
+      LATTES_UID: ${LATTES_UID:-1000}
+      LATTES_GID: ${LATTES_GID:-1000}
+      TZ: America/Sao_Paulo
+    ports:
+      # Só localhost: o noVNC mostra o navegador do coletor, não deve ficar aberto na rede.
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+      - "127.0.0.1:${NOVNC_PORT:-6080}:6080"
+    volumes:
+      - ./data/app:/data
+    shm_size: 1gb
