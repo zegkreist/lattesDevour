@@ -4,7 +4,7 @@
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type Simulation } from 'd3-force';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-export interface GNode { id: string; label: string; kind: 'pesquisador' | 'obra'; grupo: string; uf?: string; instituicao?: string; ano?: number; lattesId?: string }
+export interface GNode { id: string; label: string; kind: 'pesquisador' | 'obra'; grupo: string; uf?: string; instituicao?: string; ano?: number; lattesId?: string; nivel?: number }
 export interface GEdge { a: string; b: string; w: number; tipo?: string }
 interface N extends GNode { x: number; y: number; vx: number; vy: number; fx?: number | null; fy?: number | null; grau: number }
 interface E { a: number; b: number; w: number }
@@ -74,6 +74,10 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
       if (n.kind === 'obra') ctx.rect(n.x - raio(n), n.y - raio(n), raio(n) * 2, raio(n) * 2);
       else ctx.arc(n.x, n.y, raio(n), 0, Math.PI * 2);
       ctx.fill();
+      if (n.nivel === 0 && n.kind === 'pesquisador') {
+        ctx.strokeStyle = dark ? '#e6edf3' : '#1e293b'; ctx.lineWidth = 1.5 / scale;
+        ctx.beginPath(); ctx.arc(n.x, n.y, raio(n) + 2 / scale, 0, Math.PI * 2); ctx.stroke();
+      }
       if (i === sel.current) {
         ctx.strokeStyle = dark ? '#e6edf3' : '#1e293b'; ctx.lineWidth = 2 / scale;
         ctx.beginPath(); ctx.arc(n.x, n.y, raio(n) + 3 / scale, 0, Math.PI * 2); ctx.stroke();
@@ -135,7 +139,7 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     t.textContent = '';
     const b = document.createElement('b'); b.textContent = n.label; t.append(b);
     const d = document.createElement('div'); d.className = 'muted';
-    d.textContent = n.kind === 'obra' ? `${n.grupo}${n.ano ? ' · ' + n.ano : ''}` : [n.instituicao, n.uf].filter(Boolean).join(' · ') || n.grupo;
+    d.textContent = n.kind === 'obra' ? `${n.grupo}${n.ano ? ' · ' + n.ano : ''}` : [n.nivel === 0 ? 'resultado da busca' : n.nivel ? `nível ${n.nivel}` : '', n.instituicao, n.uf].filter(Boolean).join(' · ') || n.grupo;
     t.append(d);
   };
 

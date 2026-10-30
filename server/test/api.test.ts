@@ -48,6 +48,10 @@ d('API (Postgres)', () => {
   it('grafo, perfil, facetas e painel respondem', async () => {
     expect((await get('/api/graph?modo=colab')).nodes).toHaveLength(1);
     expect((await get('/api/graph?modo=obras&uf=MG')).edges).toBeDefined();
+    // Rede a partir do filtro: a semente fica no nível 0 e os coautores sem Lattes coletado entram expandidos.
+    const rede = await get('/api/graph?modo=colab&regiao=sudeste&niveis=2');
+    expect(rede.nodes.find((n: any) => n.id === '1111111111111111').nivel).toBe(0);
+    expect((await get('/api/graph?modo=colab&regiao=sul&niveis=2')).nodes).toHaveLength(0);
     expect((await get('/api/pesquisadores/1111111111111111')).obras).toHaveLength(5);
     expect((await get('/api/facets')).ufs).toEqual([{ v: 'MG', n: '1' }]);
     expect((await get('/api/stats')).totais.obras).toBe(5);

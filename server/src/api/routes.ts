@@ -378,68 +378,98 @@ export async function rotas(app: FastifyInstance): Promise<void> {
   });
 
   // ───────────── Grafo ─────────────
+  // A rede nasce do filtro: o resultado da busca são as sementes e o grafo se expande `niveis`
+  // saltos (coautoria + orientação) a partir delas, incluindo quem não foi coletado (só tem ID).
+  // niveis=0 reproduz o antigo "só quem passa no filtro".
   // modo=colab: pesquisadores ligados por coautoria (peso = obras em comum) e orientação.
-  // modo=obras: pesquisadores ↔ obras (bipartido), limitado às obras com mais coautores do filtro.
+  // modo=obras: pesquisadores ↔ obras (bipartido), só obras com ≥2 pesquisadores da rede.
   app.get<{ Querystring: Q }>('/api/graph', async (req) => {
     const q = req.query;
     const limite = intOr(q.limit, 300, 2000);
+    const niveis = Math.min(Math.max(parseInt(q.niveis ?? '', 10) || 0, 0), 3);
+    const sementes = niveis === 0 ? limite : intOr(q.sementes, 30, limite);
     const tags = tagsDe(q);
     const filtro = q.q ? norm(q.q) : '';
-    const base = `SELECT p.id FROM pesquisador p WHERE ($1::text[] = '{}' OR p.tags @> $1::text[])
-                  AND ($2 = '' OR p.nome_norm % $2 OR p.nome_norm ILIKE '%' || $2 || '%')`;
+
+    const sem = await pool.query(
+      `SELECT p.id FROM pesquisador p WHERE ($1::text[] = '{}' OR p.tags @> $1::text[])
+         AND ($2 = '' OR p.nome_norm % $2 OR p.nome_norm ILIKE '%' || $2 || '%')
+       ORDER BY CASE WHEN $2 = '' THEN 0 ELSE similarity(p.nome_norm, $2) END DESC,
+                (SELECT count(*) FROM obra_fonte f WHERE f.pesquisador_id = p.id) DESC, p.nome
+       LIMIT $3`,
+      [tags, filtro, sementes],
+    );
+    const nivel = new Map<string, number>(sem.rows.map((r: any) => [r.id as string, 0]));
+    let fronteira = [...nivel.keys()];
+    for (let n = 1; n <= niveis && fronteira.length && nivel.size < limite; n++) {
+      const viz = await pool.query(
+        `SELECT id, sum(w) AS w FROM (
+           SELECT b.autor_lattes_id AS id, count(*) AS w FROM autoria a
+             JOIN autoria b ON b.obra_id = a.obra_id AND b.autor_lattes_id IS NOT NULL AND b.autor_lattes_id <> a.autor_lattes_id
+             WHERE a.autor_lattes_id = ANY($1) GROUP BY 1
+           UNION ALL SELECT orientado_lattes_id, count(*) FROM orientacao WHERE orientador_id = ANY($1) AND orientado_lattes_id IS NOT NULL GROUP BY 1
+           UNION ALL SELECT orientador_id, count(*) FROM orientacao WHERE orientado_lattes_id = ANY($1) GROUP BY 1
+         ) x WHERE id <> ALL($2) GROUP BY id ORDER BY 2 DESC LIMIT $3`,
+        [fronteira, [...nivel.keys()], limite - nivel.size],
+      );
+      fronteira = viz.rows.map((r: any) => r.id as string);
+      for (const id of fronteira) nivel.set(id, n);
+    }
+    const ids = [...nivel.keys()];
+    if (!ids.length) return { nodes: [], edges: [] };
+
+    // Pesquisadores coletados trazem região/instituição; os demais só o nome que aparece nas autorias.
+    const ps = await pool.query(
+      `SELECT u.id, COALESCE(p.nome, (SELECT min(nome) FROM autoria WHERE autor_lattes_id = u.id)) AS nome,
+              p.regiao, p.uf, i.nome AS instituicao, p.id IS NOT NULL AS coletado
+       FROM unnest($1::text[]) u(id) LEFT JOIN pesquisador p ON p.id = u.id LEFT JOIN instituicao i ON i.id = p.instituicao_id`,
+      [ids],
+    );
+    const pessoa = (p: any) => ({
+      id: p.id, label: p.nome ?? p.id, kind: 'pesquisador', grupo: p.regiao ?? (p.coletado ? 'sem região' : 'não coletado'),
+      uf: p.uf, instituicao: p.instituicao, lattesId: p.coletado ? p.id : undefined, nivel: nivel.get(p.id),
+    });
 
     if (q.modo === 'obras') {
       const r = await pool.query(
-        `WITH sel AS (${base}),
-         o AS (SELECT f.obra_id, count(*) n FROM obra_fonte f JOIN sel ON sel.id=f.pesquisador_id GROUP BY 1 HAVING count(*) >= 2 ORDER BY 2 DESC LIMIT $3)
-         SELECT f.obra_id, f.pesquisador_id, ob.titulo, ob.ano, ob.tipo, p.nome, p.regiao, p.uf
-         FROM o JOIN obra_fonte f ON f.obra_id=o.obra_id JOIN obra ob ON ob.id=o.obra_id JOIN pesquisador p ON p.id=f.pesquisador_id
-         WHERE f.pesquisador_id IN (SELECT id FROM sel)`,
-        [tags, filtro, Math.max(10, Math.floor(limite / 3))],
+        `WITH o AS (SELECT obra_id, count(DISTINCT autor_lattes_id) n FROM autoria WHERE autor_lattes_id = ANY($1)
+                    GROUP BY 1 HAVING count(DISTINCT autor_lattes_id) >= 2 ORDER BY 2 DESC LIMIT $2)
+         SELECT DISTINCT a.obra_id, a.autor_lattes_id, ob.titulo, ob.ano, ob.tipo
+         FROM o JOIN autoria a ON a.obra_id = o.obra_id JOIN obra ob ON ob.id = o.obra_id
+         WHERE a.autor_lattes_id = ANY($1)`,
+        [ids, Math.max(10, Math.floor(limite / 3))],
       );
       const nodes = new Map<string, any>();
       const edges: { a: string; b: string; w: number }[] = [];
+      for (const p of ps.rows) nodes.set(`p:${p.id}`, { ...pessoa(p), id: `p:${p.id}` });
       for (const x of r.rows) {
-        nodes.set(`p:${x.pesquisador_id}`, { id: `p:${x.pesquisador_id}`, label: x.nome, kind: 'pesquisador', grupo: x.regiao ?? 'sem região', uf: x.uf, lattesId: x.pesquisador_id });
         nodes.set(`o:${x.obra_id}`, { id: `o:${x.obra_id}`, label: x.titulo, kind: 'obra', grupo: x.tipo, ano: x.ano });
-        edges.push({ a: `p:${x.pesquisador_id}`, b: `o:${x.obra_id}`, w: 1 });
+        edges.push({ a: `p:${x.autor_lattes_id}`, b: `o:${x.obra_id}`, w: 1 });
       }
-      return { nodes: [...nodes.values()], edges };
+      // Só fica quem se liga a alguma obra.
+      const usados = new Set(edges.flatMap((e) => [e.a, e.b]));
+      return { nodes: [...nodes.values()].filter((n) => usados.has(n.id)), edges };
     }
 
-    // Colaboradores: arestas de coautoria + orientação entre pesquisadores coletados do filtro.
+    // Colaboradores: arestas de coautoria + orientação entre quem está na rede.
     const e = await pool.query(
-      `WITH sel AS (${base}),
-       co AS (
+      `WITH co AS (
          SELECT a.autor_lattes_id AS a, b.autor_lattes_id AS b, count(*) AS w
          FROM autoria a JOIN autoria b ON a.obra_id=b.obra_id AND a.autor_lattes_id < b.autor_lattes_id
-         WHERE a.autor_lattes_id IN (SELECT id FROM sel) AND b.autor_lattes_id IN (SELECT id FROM sel)
+         WHERE a.autor_lattes_id = ANY($1) AND b.autor_lattes_id = ANY($1)
          GROUP BY 1,2
        ), ori AS (
          SELECT orientador_id AS a, orientado_lattes_id AS b, count(*) AS w FROM orientacao
-         WHERE orientado_lattes_id IS NOT NULL AND orientador_id IN (SELECT id FROM sel) AND orientado_lattes_id IN (SELECT id FROM sel)
+         WHERE orientado_lattes_id = ANY($1) AND orientador_id = ANY($1)
          GROUP BY 1,2
        )
        SELECT a, b, w, 'coautoria' AS tipo FROM co UNION ALL SELECT least(a,b), greatest(a,b), w, 'orientacao' FROM ori
-       ORDER BY w DESC LIMIT $3`,
-      [tags, filtro, limite * 4],
+       ORDER BY w DESC LIMIT $2`,
+      [ids, limite * 8],
     );
-    const grau = new Map<string, number>();
-    for (const x of e.rows) {
-      grau.set(x.a, (grau.get(x.a) ?? 0) + Number(x.w));
-      grau.set(x.b, (grau.get(x.b) ?? 0) + Number(x.w));
-    }
-    const top = new Set([...grau.entries()].sort((x, y) => y[1] - x[1]).slice(0, limite).map(([id]) => id));
-    // Inclui também quem não tem aresta (até o limite), pra o filtro não "sumir" com gente.
-    const soltos = await pool.query(`WITH sel AS (${base}) SELECT id FROM sel LIMIT $3`, [tags, filtro, limite]);
-    for (const r of soltos.rows) if (top.size < limite) top.add(r.id);
-    const ids = [...top];
-    const ps = ids.length
-      ? await pool.query(`SELECT p.id, p.nome, p.regiao, p.uf, i.nome AS instituicao FROM pesquisador p LEFT JOIN instituicao i ON i.id=p.instituicao_id WHERE p.id = ANY($1)`, [ids])
-      : { rows: [] as any[] };
     return {
-      nodes: ps.rows.map((p: any) => ({ id: p.id, label: p.nome, kind: 'pesquisador', grupo: p.regiao ?? 'sem região', uf: p.uf, instituicao: p.instituicao, lattesId: p.id })),
-      edges: e.rows.filter((x: any) => top.has(x.a) && top.has(x.b)).map((x: any) => ({ a: x.a, b: x.b, w: Number(x.w), tipo: x.tipo })),
+      nodes: ps.rows.map(pessoa),
+      edges: e.rows.map((x: any) => ({ a: x.a, b: x.b, w: Number(x.w), tipo: x.tipo })),
     };
   });
 }
