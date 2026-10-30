@@ -129,9 +129,7 @@ fs.mkdirSync(paths.browserProfile(), { recursive: true });
     // >>> stealth
     // deviceScaleFactor/hasTouch/isMobile mantêm o fingerprint estável entre runs
     // (perfil fixo é o que mais pesa no score do reCAPTCHA v2; mudar a cada CV piora).
-    deviceScaleFactor: 1,
-    hasTouch: false,
-    isMobile: false,
+
     // <<< stealth
     args: [
       '--no-sandbox',
