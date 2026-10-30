@@ -61,6 +61,43 @@ async function esperar(ms: number): Promise<void> {
 
 const hhmm = (t: number) => new Date(t).toLocaleTimeString('pt-BR', { timeZone: config.tz, hour: '2-digit', minute: '2-digit' });
 
+// >>> stealth
+// Roda ANTES de qualquer script da página, em toda page() do contexto persistente.
+// Objetivo: subir o score do reCAPTCHA v2 para que ele mostre só a caixinha em vez do
+// desafio de imagens. NÃO reusa token (impossível: token v2 é single-use e expira em ~2 min).
+// NÃO altera o ritmo de coleta (a janela deslizante de CVs/hora continua valendo).
+const STEALTH_INIT = `
+  Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => [1,2,3,4,5].map(() => ({ name: 'Chrome PDF Plugin' })),
+  });
+
+  Object.defineProperty(navigator, 'languages', {
+    get: () => ['pt-BR', 'pt', 'en-US', 'en'],
+  });
+
+  if (!(globalThis as any).chrome) (globalThis as any).chrome = { runtime: {} };
+
+  const origQuery = window.navigator.permissions.query;
+  window.navigator.permissions.query = (p: any) =>
+    p.name === 'notifications'
+      ? Promise.resolve({ state: Notification.permission })
+      : origQuery(p);
+
+  const getParam = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function (p: number) {
+    if (p === 37445) return 'Intel Inc.';
+    if (p === 37446) return 'Intel Iris OpenGL Engine';
+    return getParam.call(this, p);
+  };
+
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+`;
+// <<< stealth
+
+
 export function iniciar(): void {
   if (state.rodando) return;
   state.rodando = true;
@@ -81,7 +118,7 @@ export function parar(): void {
 
 async function contexto(): Promise<BrowserContext> {
   if (ctx) return ctx;
-  fs.mkdirSync(paths.browserProfile(), { recursive: true });
+fs.mkdirSync(paths.browserProfile(), { recursive: true });
   ctx = await chromium.launchPersistentContext(paths.browserProfile(), {
     headless: config.headless,
     acceptDownloads: true,
@@ -89,8 +126,29 @@ async function contexto(): Promise<BrowserContext> {
     // Navegador em português e no horário de Brasília (o padrão do container é en-US).
     locale: 'pt-BR',
     timezoneId: config.tz,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--start-maximized', '--lang=pt-BR'],
+    // >>> stealth
+    // deviceScaleFactor/hasTouch/isMobile mantêm o fingerprint estável entre runs
+    // (perfil fixo é o que mais pesa no score do reCAPTCHA v2; mudar a cada CV piora).
+    deviceScaleFactor: 1,
+    hasTouch: false,
+    isMobile: false,
+    // <<< stealth
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--start-maximized',
+      '--lang=pt-BR',
+      // >>> stealth
+      '--disable-blink-features=AutomationControlled',
+      '--no-first-run',
+      '--no-default-browser-check',
+      // <<< stealth
+    ],
   });
+  // >>> stealth
+  // addInitScript no contexto: vale para toda page() nova, inclusive a primeira.
+  await ctx.addInitScript(STEALTH_INIT);
+  // <<< stealth
   return ctx;
 }
 
