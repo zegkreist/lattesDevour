@@ -3,7 +3,8 @@ import { fazerBackup } from '../backup.js';
 import { config } from '../config.js';
 import * as coletor from '../collector/collector.js';
 import { importarPasta, reprocessar } from '../collector/pipeline.js';
-import { getSetting, pool, setSetting } from '../db.js';
+import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
+import { pool, setSetting } from '../db.js';
 import { adicionarAlvos, buscarPorNome, descobrindo, descobrirInstituicao } from '../discovery/orcid.js';
 import { enfileirar, extrairIds } from '../discovery/ids.js';
 import { currentParserVersion, listParsers } from '../parsers/index.js';
@@ -129,12 +130,41 @@ export async function rotas(app: FastifyInstance): Promise<void> {
   });
 
   // ───────────── Coletor / import / reprocesso ─────────────
-  app.get('/api/coletor', async () => ({ ...coletor.state, config: { delayMs: await getSetting('coleta.delay_ms', 8000) } }));
+  app.get('/api/coletor', async () => {
+    const { chave, origem } = await chave2Captcha();
+    return {
+      ...coletor.state,
+      captchaAuto: !!chave,
+      config: {
+        porHora: await coletor.cvsPorHora(),
+        porHoraMin: coletor.POR_HORA.min,
+        porHoraMax: coletor.POR_HORA.max,
+        // A chave nunca volta inteira para o front: só a origem e os 4 últimos caracteres.
+        chave2Captcha: origem ? { origem, final: chave.slice(-4) } : null,
+      },
+    };
+  });
   app.post('/api/coletor/iniciar', async () => { coletor.iniciar(); return coletor.state; });
   app.post('/api/coletor/parar', async () => { coletor.parar(); return coletor.state; });
-  app.put<{ Body: { delayMs: number } }>('/api/coletor/config', async (req) => {
-    await setSetting('coleta.delay_ms', Math.min(Math.max(Number(req.body.delayMs) || 8000, 2000), 600_000));
+  app.put<{ Body: { porHora: number } }>('/api/coletor/config', async (req) => {
+    const { min, max, padrao } = coletor.POR_HORA;
+    await setSetting('coleta.cvs_por_hora', Math.min(Math.max(Math.round(Number(req.body.porHora)) || padrao, min), max));
     return { ok: true };
+  });
+  // Chave vazia apaga a do painel (volta a valer a do .env, se houver).
+  app.put<{ Body: { chave: string } }>('/api/coletor/2captcha', async (req, reply) => {
+    const chave = String(req.body?.chave ?? '').trim();
+    if (!chave) {
+      await setSetting('coleta.twocaptcha_key', '');
+      return { ok: true };
+    }
+    try {
+      const s = await saldo(chave);
+      await setSetting('coleta.twocaptcha_key', chave);
+      return { ok: true, saldo: s };
+    } catch (e) {
+      return reply.code(400).send({ erro: `chave recusada pelo 2Captcha (${e instanceof Error ? e.message : e})` });
+    }
   });
   app.post('/api/importar-pasta', async () => importarPasta());
   app.post<{ Body: { todos?: boolean } }>('/api/reprocessar', async (req) => ({ reenfileirados: await reprocessar(!!req.body?.todos) }));

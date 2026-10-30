@@ -30,11 +30,20 @@ O Lattes protege **a busca e o download do XML com reCAPTCHA v2, a cada currícu
 (verificado nas páginas `busca.do` e `visualizacv.do`; a busca sem token devolve “Nenhum
 resultado”). Por isso:
 
-- **Não há integração com serviço de quebra de captcha (2Captcha etc.), de propósito.** O captcha é o
-  controle do CNPq contra extração em massa; contorná-lo não é algo que este projeto faz.
-- O coletor funciona com **humano no circuito**: abre o CV num Chromium real, marca
-  `aguardando_captcha`, e espera você resolver pelo noVNC e confirmar o download. Se ninguém
-  responder em `CAPTCHA_TIMEOUT_MS` (10 min), **pausa** a coleta e devolve o ID à fila.
+- **Modo automático (2Captcha):** com a chave cadastrada na aba Coleta (validada pelo saldo antes
+  de salvar; a do painel vale sobre `TWOCAPTCHA_API_KEY` do `.env`), o coletor manda o
+  reCAPTCHA (sitekey + URL) para o 2Captcha, injeta o token na página, chama o callback do
+  reCAPTCHA e clica no botão de confirmação (achado pelo texto “baixar/download/confirmar/enviar”
+  ou por `LATTES_DOWNLOAD_SUBMIT`). Se o token não destravar o download em 30 s, o CV cai para o
+  modo humano abaixo. Chave inválida, saldo zerado ou IP bloqueado no 2Captcha **pausam** a
+  coleta; captcha insolúvel ou timeout (`TWOCAPTCHA_TIMEOUT_MS`, 3 min) contam como tentativa do CV.
+- **Modo humano (sem chave):** abre o CV num Chromium real, marca `aguardando_captcha`, e espera
+  você resolver pelo noVNC e confirmar o download. Se ninguém responder em `CAPTCHA_TIMEOUT_MS`
+  (10 min), **pausa** a coleta e devolve o ID à fila.
+- **Ritmo:** nos dois modos, de **60 a 180 CVs por hora** (padrão 60), ajustável na aba Coleta, que
+  mostra o intervalo resultante. Os CVs são espaçados de início a início (3600/N s, ±20%, mínimo de
+  5 s entre um e outro) e uma janela deslizante de 1 h serve de trava. Custo de referência do
+  2Captcha: alguns dólares por mil captchas, ou seja, uns US$ 4–5/dia a 60/h rodando 24 h.
 - Para volume (o Brasil inteiro) o caminho é o **Extrator Lattes do CNPq** (web service para
   instituições de ensino/pesquisa; pedido por `atendimento@cnpq.br`, assunto “Solicitação de
   acesso ao Lattes Extrator”). O que ele entregar (`.xml` ou `.zip`) é só soltar em
@@ -42,9 +51,11 @@ resultado”). Por isso:
 - O CNPq publica a lista de IDs de todos os currículos
   (<https://memoria.cnpq.br/web/portal-lattes/extracoes-de-dados>). Cole na aba Coleta → “Adicionar IDs”.
 
-> **Não verificado:** o passo pós-captcha (o clique de confirmação e o formato exato do arquivo
-> baixado) depende de uma pessoa resolver um captcha real; o fluxo foi implementado a partir da
-> estrutura da página, e a URL é configurável (`LATTES_DOWNLOAD_URL`) caso o site mude.
+> **Não verificado:** o passo pós-captcha (o clique de confirmação, o callback do reCAPTCHA e o
+> formato exato do arquivo baixado) não foi testado contra um CV real; o fluxo foi implementado a
+> partir da estrutura genérica da página, e a URL e o botão são configuráveis
+> (`LATTES_DOWNLOAD_URL`, `LATTES_DOWNLOAD_SUBMIT`) caso o site mude. O cliente do 2Captcha tem
+> teste com a API mockada.
 
 ## Como achar pesquisadores
 
@@ -116,7 +127,7 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 
 ## Limitações conhecidas
 
-- Coleta nominal exige captcha humano (acima); descoberta via ORCID cobre só parte dos pesquisadores.
+- Coleta nominal exige captcha (humano ou 2Captcha, acima); descoberta via ORCID cobre só parte dos pesquisadores.
 - O grafo só liga pesquisadores **já coletados** (coautores externos com ID ainda não viram nós).
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.
 - O backup em nuvem faz tarball completo dos XMLs a cada rodada (não incremental).

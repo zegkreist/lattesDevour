@@ -9,9 +9,16 @@ export const config = {
   // Template da URL de download do XML (depois do captcha). O Lattes já mudou isso antes,
   // por isso é configurável sem rebuild.
   lattesDownloadUrl:
-    env.LATTES_DOWNLOAD_URL ??
+    env.LATTES_DOWNLOAD_URL ||
     'https://buscatextual.cnpq.br/buscatextual/download.do?metodo=apresentar&idcnpq={id}',
+  // Seletor do botão que confirma o download depois do captcha (vazio = acha pelo texto).
+  lattesSubmitSelector: env.LATTES_DOWNLOAD_SUBMIT ?? '',
   captchaTimeoutMs: Number(env.CAPTCHA_TIMEOUT_MS ?? 10 * 60_000),
+  // Com chave, o captcha é resolvido pelo 2Captcha; sem chave, por uma pessoa via noVNC.
+  twoCaptcha: {
+    apiKey: env.TWOCAPTCHA_API_KEY ?? '',
+    timeoutMs: Number(env.TWOCAPTCHA_TIMEOUT_MS ?? 3 * 60_000),
+  },
   // O navegador do coletor precisa de tela (o captcha é resolvido por uma pessoa via noVNC).
   headless: env.COLLECTOR_HEADLESS === 'true',
   novncUrl: env.NOVNC_URL ?? 'http://localhost:6080/vnc.html?autoconnect=true&resize=scale',

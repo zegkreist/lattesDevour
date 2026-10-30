@@ -19,7 +19,7 @@ export function Config() {
         <button className="b sec" onClick={() => confirm('Reprocessar TODOS os CVs?') && api('/reprocessar', { body: { todos: true } }).then((r) => setMsg(`${fmt(r.reenfileirados)} CV(s) na fila de parse`))}>Reprocessar todos</button>
       </Card>
       <Card titulo="Sobre captcha">
-        <p className="muted">O Lattes protege a busca e o download do XML com reCAPTCHA. Este app não integra serviços de quebra de captcha: o coletor pausa e pede para uma pessoa resolver (aba Coleta). Para extração em volume, a via oficial é o Extrator Lattes do CNPq (<code>atendimento@cnpq.br</code>, assunto “Solicitação de acesso ao Lattes Extrator”), que exige uma instituição de ensino/pesquisa.</p>
+        <p className="muted">O Lattes protege a busca e o download do XML com reCAPTCHA. Com a chave do 2Captcha (aba Coleta, ou <code>TWOCAPTCHA_API_KEY</code> no <code>.env</code>) o coletor resolve sozinho; sem ela, pausa e pede para uma pessoa resolver. O ritmo (60 a 180 CVs/hora) também fica na aba Coleta. Para extração em volume, a via oficial é o Extrator Lattes do CNPq (<code>atendimento@cnpq.br</code>, assunto “Solicitação de acesso ao Lattes Extrator”), que exige uma instituição de ensino/pesquisa.</p>
         {s && <p className="muted">Último backup: {s.backups[0] ? `${when(s.backups[0].em)} (${s.backups[0].ok ? 'ok' : 'falhou'})` : 'nenhum'}</p>}
       </Card>
     </div>
