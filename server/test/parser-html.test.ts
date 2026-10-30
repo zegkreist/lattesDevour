@@ -80,7 +80,11 @@ describe('parser lattes-html-v1', () => {
     const [org] = obra('organizacao_de_evento');
     expect(org).toMatchObject({ titulo: 'III Colóquio de Letras', ano: 2022 });
     // Participação em eventos fica de fora, como no XML.
-    expect(cv.obras).toHaveLength(8);
+    expect(cv.obras).toHaveLength(9);
+    // Dona do CV citada pelo nome completo, sem vírgula.
+    const ap3 = obra('apresentacao_de_trabalho')[2];
+    expect(ap3).toMatchObject({ titulo: 'Arte e política', ano: 2025 });
+    expect(ap3.autores.map((x) => x.nome)).toEqual(['ANA FICTÍCIA SOUZA']);
     // Prenome por extenso com ponto ("MODELO, Elisa.;") ainda é autor.
     const [, ap2] = obra('apresentacao_de_trabalho');
     expect(ap2).toMatchObject({ titulo: 'Fotografia e sertão', subtipo: 'CONFERENCIA_OU_PALESTRA' });
@@ -137,7 +141,8 @@ describe.skipIf(!amostras.length)('todas as amostras reais', () => {
     expect(r.desconhecidos).toEqual([]);
     for (const o of r.obras) {
       expect(o.autores.length, o.dados.CITACAO).toBeGreaterThan(0);
-      expect(o.ano, o.dados.CITACAO).not.toBeNull();
+      // Sem ano só quando a citação não tem nenhum (dado faltando no Lattes, não erro do parser).
+      if (o.ano === null) expect(o.dados.CITACAO, 'ano não extraído').not.toMatch(/\b(19|20)\d\d\b/);
     }
   });
 });

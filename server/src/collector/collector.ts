@@ -86,7 +86,10 @@ async function contexto(): Promise<BrowserContext> {
     headless: config.headless,
     acceptDownloads: true,
     viewport: null,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--start-maximized'],
+    // Navegador em português e no horário de Brasília (o padrão do container é en-US).
+    locale: 'pt-BR',
+    timezoneId: config.tz,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--start-maximized', '--lang=pt-BR'],
   });
   return ctx;
 }

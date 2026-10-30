@@ -110,8 +110,8 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   dois coautores — um vindo do XML e outro do HTML — virar uma só. Lê identificação, endereço
   profissional, formação, atuação, áreas, produções (artigos com DOI/ISSN/periódico do `cvuri`) e
   orientações concluídas; os blocos “Pós-doutorado” e “Livre-docência” entram na formação. Participação
-  em eventos, orientações em andamento, bancas e projetos (pesquisa, extensão, ensino,
-  desenvolvimento) ficam de fora, como no XML. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
+  em eventos, orientações em andamento, bancas, projetos (pesquisa, extensão, ensino,
+  desenvolvimento), corpo editorial, revisão e comitês de assessoramento ficam de fora, como no XML. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
   técnica”, “Entrevistas…”) usam o parêntese de cada item, que é o nome do elemento no XML
   (`(Tradução/Artigo)` → `traducao`). Coautor com link para o próprio Lattes já grava o ID na
   autoria, então a aresta de coautoria existe antes de coletar o CV dele. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML

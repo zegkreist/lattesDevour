@@ -57,7 +57,7 @@ const BLOCOS_TRATADOS = new Set([
 const BLOCOS_IGNORADOS = new Set([
   '', 'formacao complementar', 'projetos de pesquisa', 'projetos de extensao', 'projetos de desenvolvimento', 'projetos de ensino',
   'outros projetos', 'idiomas', 'premios e titulos', 'bancas', 'linhas de pesquisa', 'membro de corpo editorial',
-  'revisor de periodico', 'revisor de projeto de fomento', 'outras informacoes relevantes', 'inovacao',
+  'revisor de periodico', 'revisor de projeto de fomento', 'membro de comite de assessoramento', 'outras informacoes relevantes', 'inovacao',
   'educacao e popularizacao de c t', 'patentes e registros',
 ]);
 
@@ -95,8 +95,19 @@ function autoresReserva(texto: string): RegExpExecArray | null {
   return Object.assign([texto, texto.slice(0, i), texto.slice(i + 3).trim()], { index: 0, input: texto }) as RegExpExecArray;
 }
 
-function separarAutores(texto: string): { autores: ParsedAutor[]; resto: string } {
-  const m = AUTORES_RE.exec(texto) ?? autoresReserva(texto);
+// Dono do CV citado pelo nome completo, sem vírgula: "FLAVIA MARIA CRUVINEL. Título".
+function autorDono(texto: string, nomesDono: string[]): RegExpExecArray | null {
+  for (const n of nomesDono) {
+    const ini = texto.slice(0, n.length);
+    if (n && ini.toLowerCase() === n.toLowerCase() && /^\s*\.\s/.test(texto.slice(n.length))) {
+      return Object.assign([texto, ini, texto.slice(n.length).replace(/^\s*\.\s+/, '')], { index: 0, input: texto }) as RegExpExecArray;
+    }
+  }
+  return null;
+}
+
+function separarAutores(texto: string, nomesDono: string[] = []): { autores: ParsedAutor[]; resto: string } {
+  const m = AUTORES_RE.exec(texto) ?? autoresReserva(texto) ?? autorDono(texto, nomesDono);
   if (!m) return { autores: [], resto: texto };
   const autores = m[1]
     .split(';')
@@ -188,7 +199,7 @@ function obra(ev: Evento, cv: ParsedCV): ParsedObra | null {
   const texto = clean(span.text);
   if (!texto) return null;
 
-  const { autores, resto } = separarAutores(texto);
+  const { autores, resto } = separarAutores(texto, [cv.nome, ...cv.nomesCitacao]);
   for (const a of autores) a.lattesId = idPorNome.get(norm(a.nome)) ?? null;
   let titulo: string | null = null;
   let veiculo: string | null = clean(meta?.get('nomePeriodico'));
@@ -434,7 +445,8 @@ export function parseHtmlCV(html: string): ParsedCV {
       if (orcid) cv.orcid = orcid;
     } else if (ev.bloco === 'endereco' && ev.tipo === 'par' && rot.startsWith('endereco profissional')) {
       const ls = linhas(ev.el);
-      const local = ls.map((l) => /-\s*([^,-]+),\s*([A-Z]{2})\s*-\s*([^.]+)/.exec(l)).find(Boolean);
+      // "74605170 - Goiânia, GO - Brasil - Caixa-postal: 131"
+      const local = ls.map((l) => /-\s*([^,-]+),\s*([A-Z]{2})\s*-\s*([^.-]+)/.exec(l)).find(Boolean);
       if (ls[0]) {
         cv.instituicao = {
           codigo: null,
