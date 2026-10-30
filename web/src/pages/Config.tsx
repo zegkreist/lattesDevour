@@ -8,6 +8,7 @@ export function Config() {
   const [busy, setBusy] = useState(false);
   const { data: ex, reload: reloadEx } = usePoll<any>('/exportar');
   const [msgEx, setMsgEx] = useState('');
+  const [msgRep, setMsgRep] = useState('');
   return (
     <div className="grid g2">
       <Card titulo="Backup">
@@ -28,7 +29,12 @@ export function Config() {
       </Card>
       <Card titulo="Reprocessar">
         <p className="muted">Reaplica o parser a todos os XMLs e HTMLs já em disco (sem baixar nada). Use depois de mudar um parser.</p>
-        <button className="b sec" onClick={() => confirm('Reprocessar TODOS os CVs?') && api('/reprocessar', { body: { todos: true } }).then((r) => setMsg(`${fmt(r.reenfileirados)} CV(s) na fila de parse`))}>Reprocessar todos</button>
+        <div className="row">
+          <button className="b sec" onClick={() => confirm('Reprocessar TODOS os CVs?') && api('/reprocessar', { body: { todos: true } }).then((r) => setMsgRep(`${fmt(r.reenfileirados)} CV(s) na fila de parse`))}>Reprocessar todos</button>
+          <button className="b sec" onClick={() => api('/reprocessar-html', { body: {} }).then((r) => setMsgRep(`${fmt(r.reenfileirados)} HTML(s) na fila de parse`))}>Reprocessar HTMLs</button>
+        </div>
+        <p className="muted">“Reprocessar HTMLs” varre a pasta <code>data/html</code> e repassa todo <code>&lt;id&gt;.html</code>, inclusive os que não estão na fila (ex.: salvos à mão do navegador).</p>
+        <p>{msgRep}</p>
       </Card>
       <Card titulo="Sobre captcha">
         <p className="muted">O Lattes protege a busca e a página de cada CV com reCAPTCHA. Com a chave do 2Captcha (aba Coleta, ou <code>TWOCAPTCHA_API_KEY</code> no <code>.env</code>) o coletor resolve sozinho; sem ela, pausa e pede para uma pessoa resolver. O ritmo (60 a 180 CVs/hora) também fica na aba Coleta. Para extração em volume, a via oficial é o Extrator Lattes do CNPq (<code>atendimento@cnpq.br</code>, assunto “Solicitação de acesso ao Lattes Extrator”), que exige uma instituição de ensino/pesquisa.</p>

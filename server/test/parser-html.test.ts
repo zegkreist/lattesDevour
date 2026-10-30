@@ -22,7 +22,8 @@ describe('parser lattes-html-v1', () => {
   });
 
   it('formação, atuação e áreas', () => {
-    expect(cv.formacao).toHaveLength(2);
+    expect(cv.formacao).toHaveLength(3);
+    expect(cv.formacao[2]).toMatchObject({ nivel: 'ensino_fundamental_primeiro_grau', instituicao: 'Escola Estadual Modelo', inicio: 1998, fim: 2005 });
     expect(cv.formacao[0]).toMatchObject({ nivel: 'pos_doutorado', instituicao: 'Universidade de Lisboa', inicio: 2023, fim: null });
     expect(cv.formacao[1]).toMatchObject({
       nivel: 'doutorado', curso: 'Letras', inicio: 2014, fim: 2018, titulo: 'Cidades de papel', orientador: 'Bruno Inventado Lima',
@@ -68,6 +69,8 @@ describe('parser lattes-html-v1', () => {
     const [c] = obra('capitulo');
     expect(c).toMatchObject({ titulo: 'O romance e a cidade', ano: 2021, veiculo: 'Estudos de ficção', chave: 'capitulo|o romance e a cidade|2021' });
     expect(c.autores.map((x) => x.nome)).toEqual(['LIMA, B. I.', 'SOUZA, A. F.']);
+    // Coautor com link para o Lattes já sai com o ID (aresta do grafo antes de coletar o CV dele).
+    expect(c.autores.map((x) => x.lattesId)).toEqual(['6543210987654321', null]);
     const [r] = obra('evento');
     expect(r).toMatchObject({ titulo: 'Memória e paisagem (1950-1952)', ano: 2022, subtipo: 'RESUMO', veiculo: 'III Colóquio de Letras' });
     const [ap] = obra('apresentacao_de_trabalho');
@@ -75,7 +78,18 @@ describe('parser lattes-html-v1', () => {
     const [org] = obra('organizacao_de_evento');
     expect(org).toMatchObject({ titulo: 'III Colóquio de Letras', ano: 2022 });
     // Participação em eventos fica de fora, como no XML.
-    expect(cv.obras).toHaveLength(5);
+    expect(cv.obras).toHaveLength(7);
+  });
+
+  it('listas mistas: o tipo vem do parêntese (nome do elemento no XML); autores fora do padrão', () => {
+    const [t] = obra('traducao');
+    expect(t).toMatchObject({ titulo: 'Ensaios traduzidos', ano: 2020, subtipo: 'LIVRO' });
+    // Nome por extenso e "(Org.)" na lista de autores.
+    expect(t.autores.map((x) => x.nome)).toEqual(['SOUZA, ANA FICTÍCIA', 'MODELO, Elisa']);
+    const [c] = obra('curso_de_curta_duracao_ministrado');
+    expect(c).toMatchObject({ titulo: 'Oficina de escrita', ano: 2021, subtipo: 'EXTENSAO' });
+    // Autor só com sobrenome: a lista vai até o " . ".
+    expect(c.autores.map((x) => x.nome)).toEqual(['PEREIRA', 'SOUZA, A. F.']);
   });
 
   it('orientações: só as concluídas, com nível, curso, instituição e ID do orientado', () => {
@@ -104,6 +118,21 @@ describe('parser lattes-html-v1', () => {
 
   it('página sem ID Lattes é erro, não CV vazio', () => {
     expect(() => parseHtmlCV('<html><body><div class="infpessoa"><h2 class="nome">X</h2></div></body></html>')).toThrow(/ID Lattes/);
+  });
+});
+
+// Amostras reais (fora do git, em data/amostras/): só rodam se existirem.
+const pastaAmostras = new URL('../../data/amostras/', import.meta.url);
+const amostras = fs.existsSync(pastaAmostras) ? fs.readdirSync(pastaAmostras).filter((f) => /^\d{16}\.html$/.test(f)) : [];
+describe.skipIf(!amostras.length)('todas as amostras reais', () => {
+  it.each(amostras)('%s: parseia, sem seção desconhecida, autores e títulos coerentes', (f) => {
+    const r = parseHtmlCV(fs.readFileSync(new URL(f, pastaAmostras), 'utf8'));
+    expect(r.lattesId).toBe(f.slice(0, 16));
+    expect(r.desconhecidos).toEqual([]);
+    for (const o of r.obras) {
+      expect(o.autores.length, o.dados.CITACAO).toBeGreaterThan(0);
+      expect(o.ano, o.dados.CITACAO).not.toBeNull();
+    }
   });
 });
 

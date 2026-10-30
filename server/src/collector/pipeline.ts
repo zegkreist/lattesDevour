@@ -91,6 +91,25 @@ export async function reprocessar(todos: boolean): Promise<number> {
   return r.rowCount ?? 0;
 }
 
+/**
+ * Reparseia todo <id>.html de data/html, inclusive os que não estão na fila (ex.: salvos à mão
+ * do navegador). Não mexe em CV que o coletor está baixando agora.
+ */
+export async function reprocessarHtml(): Promise<number> {
+  const dir = paths.html();
+  if (!fs.existsSync(dir)) return 0;
+  const ids = fs.readdirSync(dir).flatMap((f) => /^(\d{16})\.html$/.exec(f)?.[1] ?? []);
+  if (!ids.length) return 0;
+  const r = await pool.query(
+    `INSERT INTO fila (lattes_id, status, origem, html_path)
+     SELECT x, 'html', 'import', $2 || '/' || x || '.html' FROM unnest($1::text[]) x
+     ON CONFLICT (lattes_id) DO UPDATE SET status='html', html_path=EXCLUDED.html_path, ultimo_erro=NULL, atualizado_em=now()
+     WHERE fila.status NOT IN ('baixando','aguardando_captcha')`,
+    [ids, dir],
+  );
+  return r.rowCount ?? 0;
+}
+
 const ID_RE = /NUMERO-IDENTIFICADOR="(\d{16})"/;
 
 /** Varre data/import: .xml ou .zip (um ou vários XMLs) -> data/xml + fila. Formato do Extrator do CNPq. */

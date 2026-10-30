@@ -31,6 +31,14 @@ const TIPO_POR_SECAO: [RegExp, string, string | null][] = [
   [/^trabalhos tecnicos/, 'trabalho_tecnico', null],
   [/^organizacao de eventos/, 'organizacao_de_evento', null],
 ];
+// Listas que misturam tipos do XML: o tipo vem do parêntese de cada item, que é o nome do
+// elemento no XML ("(Tradução/Artigo)" -> traducao, "(Programa de rádio ou TV/Entrevista)" ->
+// programa_de_radio_ou_tv); sem parêntese, o tipo da lista.
+const SECOES_MISTAS: [RegExp, string][] = [
+  [/^demais tipos de producao tecnica/, 'outra_producao_tecnica'],
+  [/^outras producoes bibliograficas/, 'outra_producao_bibliografica'],
+  [/^entrevistas/, 'programa_de_radio_ou_tv'],
+];
 // Subtítulos que não são lista de obras.
 const SUBTITULOS_IGNORADOS = /^(citacoes|producao bibliografica|producao tecnica|producao artistica)/;
 
@@ -64,16 +72,28 @@ function ultimoAno(s: string): number | null {
   return anos.length ? anos[anos.length - 1] : null;
 }
 
-// "SILVA, I. A. ; VERDEJO, P. B. ; LAGO, S. N. A. . Título..." -> autores + resto.
-// A lista de autores termina na primeira inicial seguida de outro ponto ("B.." ou "A. .").
-const AUTORES_RE = /^(.+?\p{Lu}\.)\s?\.\s+(.+)$/su;
+// Autor na citação = "SOBRENOME, prenomes", com prenomes em iniciais ("P. B."), por extenso
+// ("JUARA", "R. de F.") e/ou "(Org.)". A lista ("A ; B ; C") termina no ponto depois de um autor
+// completo: "VERDEJO, P. B.. Título", "LAGO, S. N. A. . Título", "DA CONCEIÇÃO, JUARA. Título".
+// Cada token de prenome termina em fronteira de palavra, o que deixa a regex sem ambiguidade.
+const PRENOME = String.raw`(?:\p{Lu}\.|[\p{L}'’-]+(?![\p{L}'’-])|\(Orgs?\.\))`;
+const AUTOR = String.raw`[^;,.()]+,(?:\s*${PRENOME})+`;
+const AUTORES_RE = new RegExp(String.raw`^(${AUTOR}(?:\s*;\s*${AUTOR})*)\s*\.\s+(.+)$`, 'su');
+
+// Reserva para autores digitados fora do padrão ("PEREIRA ; GOMES, B. C. M. . Título"): o Lattes
+// separa a lista do título com " . " quando o último autor não termina em inicial.
+function autoresReserva(texto: string): RegExpExecArray | null {
+  const i = texto.indexOf(' . ');
+  if (i <= 0 || i > 300 || !/[,;]/.test(texto.slice(0, i))) return null;
+  return Object.assign([texto, texto.slice(0, i), texto.slice(i + 3).trim()], { index: 0, input: texto }) as RegExpExecArray;
+}
 
 function separarAutores(texto: string): { autores: ParsedAutor[]; resto: string } {
-  const m = AUTORES_RE.exec(texto);
+  const m = AUTORES_RE.exec(texto) ?? autoresReserva(texto);
   if (!m) return { autores: [], resto: texto };
   const autores = m[1]
     .split(';')
-    .map((a) => clean(a))
+    .map((a) => clean(a.replace(/\(Orgs?\.\)/g, '')))
     .filter((a): a is string => !!a)
     .map((nome, i) => ({ ordem: i + 1, nome, nomeCitacao: nome, lattesId: null }));
   return { autores, resto: m[2] };
@@ -139,8 +159,9 @@ function obra(ev: Evento, cv: ParsedCV): ParsedObra | null {
   const sub = norm(ev.sub ?? ev.inst ?? '');
   if (SUBTITULOS_IGNORADOS.test(sub)) return null;
   const achado = TIPO_POR_SECAO.find(([re]) => re.test(sub));
+  const mista = SECOES_MISTAS.find(([re]) => re.test(sub));
   let tipo = achado?.[1];
-  if (!tipo) {
+  if (!tipo && !mista) {
     tipo = sub.replace(/ /g, '_') || 'desconhecido';
     cv.avisos.push(`tipo de produção sem mapeamento: "${ev.sub ?? ev.inst}" (gravado como ${tipo})`);
   }
@@ -150,14 +171,26 @@ function obra(ev: Evento, cv: ParsedCV): ParsedObra | null {
   const meta = cvuri?.includes('?') ? new URLSearchParams(cvuri.slice(cvuri.indexOf('?') + 1)) : null;
   const anoSpan = toInt(span.querySelector('[data-tipo-ordenacao="ano"]')?.text);
   const doiHref = span.querySelector('a.icone-doi')?.getAttribute('href') ?? meta?.get('doi') ?? null;
+  // Coautor com link para o próprio Lattes: <a href="lattes.cnpq.br/<id>">SOBRENOME, X.</a>.
+  const idPorNome = new Map<string, string>();
+  for (const a of span.querySelectorAll('a[href*="lattes.cnpq.br/"]')) {
+    const id = idLattes(a.getAttribute('href'));
+    if (id && clean(a.text)) idPorNome.set(norm(a.text), id);
+  }
   for (const s of span.querySelectorAll('.informacao-artigo, .citado')) s.remove();
   const texto = clean(span.text);
   if (!texto) return null;
 
   const { autores, resto } = separarAutores(texto);
+  for (const a of autores) a.lattesId = idPorNome.get(norm(a.nome)) ?? null;
   let titulo: string | null = null;
   let veiculo: string | null = clean(meta?.get('nomePeriodico'));
-  const subtipoParen = /\(([^()]+)\)\s*\.?\s*$/.exec(resto)?.[1] ?? null;
+  const subtipoParen = /\(([^()]+)\)[\s.>]*$/.exec(resto)?.[1] ?? null;
+  if (mista) {
+    const prefixo = subtipoParen?.includes('/') ? norm(subtipoParen.split('/')[0]) : '';
+    tipo = prefixo ? prefixo.replace(/ /g, '_') : mista[1];
+  }
+  if (!tipo) return null;
   if (meta) {
     // O título do texto é mais fiel (o cvuri troca aspas por "¿"); o do cvuri é a reserva.
     const fimTitulo = veiculo ? resto.indexOf(`. ${veiculo}`) : -1;
@@ -182,7 +215,7 @@ function obra(ev: Evento, cv: ParsedCV): ParsedObra | null {
   const ano = anoSpan ?? ultimoAno(resto);
   const doi = doiHref ? doiHref.replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').toLowerCase() : null;
   // Natureza no formato do XML: "Comunicação" -> "COMUNICACAO".
-  const natureza = subtipoParen ? norm(subtipoParen.split('/').pop()).toUpperCase().replace(/ /g, '_') : null;
+  const natureza = subtipoParen ? norm(subtipoParen.split('/').pop()).toUpperCase().replace(/ /g, '_') || null : null;
   const subtipo = achado?.[2] ?? natureza;
   const posTitulo = resto.indexOf(titulo);
   const depoisTitulo = posTitulo >= 0 ? resto.slice(posTitulo + titulo.length).replace(/^[\s.]+/, '') : '';
@@ -300,6 +333,7 @@ const NIVEIS_FORMACAO: [RegExp, string][] = [
   [/^residencia/, 'residencia_medica'],
   [/^graduacao/, 'graduacao'],
   [/^ensino medio/, 'ensino_medio_segundo_grau'],
+  [/^ensino fundamental/, 'ensino_fundamental_primeiro_grau'],
   [/^curso tecnico/, 'curso_tecnico_profissionalizante'],
 ];
 
@@ -321,14 +355,29 @@ function instituicaoDeLinha(linha: string): { nome: string; pais: string | null 
 function vinculados(root: HTMLElement, dono: string): { lattesId: string; nome: string | null }[] {
   const porId = new Map<string, string | null>();
   for (const a of root.querySelectorAll('a[href*="lattes.cnpq.br/"]')) {
-    const id = /lattes\.cnpq\.br\/(\d{16})/.exec(a.getAttribute('href') ?? '')?.[1];
+    const id = idLattes(a.getAttribute('href'));
     if (!id || id === dono) continue;
-    const irmaos = a.parentNode?.childNodes ?? [];
-    const seguinte = irmaos[irmaos.indexOf(a) + 1];
-    const nome = seguinte ? clean(semPonto(seguinte.text.split(/[.;(]/)[0])) : null;
-    if (!porId.get(id)) porId.set(id, nome);
+    // Coautor: o nome de citação é o texto do link. Orientador/orientado: ícone + nome depois.
+    let nome = clean(a.text);
+    if (!nome) {
+      const irmaos = a.parentNode?.childNodes ?? [];
+      const seguinte = irmaos[irmaos.indexOf(a) + 1];
+      nome = seguinte ? nomeNoInicio(seguinte.text) : null;
+    }
+    // Prefere o nome por extenso ao de citação ("SOBRENOME, X.").
+    const atual = porId.get(id);
+    if (!atual || (atual.includes(',') && nome && !nome.includes(','))) porId.set(id, nome ?? atual ?? null);
   }
   return [...porId].map(([lattesId, nome]) => ({ lattesId, nome }));
+}
+
+const idLattes = (href: string | undefined) => /lattes\.cnpq\.br\/(\d{16})/.exec(href ?? '')?.[1] ?? null;
+
+/** "Markus J. Weininger. Título..." -> "Markus J. Weininger" (o ponto de inicial não encerra o nome). */
+function nomeNoInicio(t: string): string | null {
+  const seg = t.split(/[;(\n]|\s-\s/)[0];
+  const m = /^(.*?)(?<!(?:^|[\s.])\p{Lu})\.(?:\s|$)/u.exec(seg);
+  return clean(semPonto(m ? m[1] : seg));
 }
 
 export function parseHtmlCV(html: string): ParsedCV {

@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { fazerBackup } from '../backup.js';
 import { config, paths } from '../config.js';
 import * as coletor from '../collector/collector.js';
-import { importarPasta, reprocessar } from '../collector/pipeline.js';
+import { importarPasta, reprocessar, reprocessarHtml } from '../collector/pipeline.js';
 import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
 import { adicionarAlvos, buscarPorNome, descobrindo, descobrirInstituicao } from '../discovery/orcid.js';
@@ -170,6 +170,7 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     }
   });
   app.post('/api/importar-pasta', async () => importarPasta());
+  app.post('/api/reprocessar-html', async () => ({ reenfileirados: await reprocessarHtml() }));
   app.post<{ Body: { todos?: boolean } }>('/api/reprocessar', async (req) => ({ reenfileirados: await reprocessar(!!req.body?.todos) }));
   app.post('/api/backup', async () => fazerBackup());
   app.post('/api/exportar', async () => exportarParquet());

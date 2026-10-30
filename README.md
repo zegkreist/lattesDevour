@@ -109,13 +109,20 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   dois coautores — um vindo do XML e outro do HTML — virar uma só. Lê identificação, endereço
   profissional, formação, atuação, áreas, produções (artigos com DOI/ISSN/periódico do `cvuri`) e
   orientações concluídas; participação em eventos e orientações em andamento ficam de fora, como
-  no XML. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML
+  no XML. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
+  técnica”, “Entrevistas…”) usam o parêntese de cada item, que é o nome do elemento no XML
+  (`(Tradução/Artigo)` → `traducao`). Coautor com link para o próprio Lattes já grava o ID na
+  autoria, então a aresta de coautoria existe antes de coletar o CV dele. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML
   e HTML do mesmo ID, vale o XML.
 - **Coleta em cadeia:** todo link `lattes.cnpq.br/<id>` de outra pessoa na página (orientador,
   orientados, coautores) entra na fila com origem `cv` e o nome como dica; quem já estava na fila
   (ex.: veio do ORCID) não duplica, só ganha o nome se não tinha.
 - Os XMLs e HTMLs crus ficam em `data/app/xml/` e `data/app/html/`, então **trocar um parser não
-  exige baixar de novo**: botão “Reprocessar”.
+  exige baixar de novo**: Configurações → “Reprocessar todos” (o que a fila conhece) ou
+  “Reprocessar HTMLs” (varre `data/app/html/` e repassa todo `<id>.html`, inclusive salvos à mão
+  do navegador).
+- Amostras reais de HTML em `data/amostras/<id>.html` (fora do git) entram num teste que exige
+  parse sem erro, sem seção desconhecida e toda obra com autor e ano.
 
 ### Adicionar um parser
 
@@ -190,7 +197,7 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 
 - Coleta nominal exige captcha (humano ou 2Captcha, acima); descoberta via ORCID acha o link do Lattes em só ~5% dos perfis.
 - CV em HTML sem “Endereço profissional” publicado fica sem UF (a instituição vem do vínculo atual), e não aparece nos filtros por região.
-- O parser de HTML foi feito a partir de **um** CV real (Letras, sem endereço nem áreas de atuação); endereço e áreas seguem a marcação esperada, mas não foram vistos num CV real.
+- O parser de HTML foi validado em 8 CVs reais (Letras, Comunicação, Psicologia, Imunologia, Tradução/Libras, Museologia); áreas com produção muito diferente (patentes, software, produção artística) ainda não foram vistas.
 - O grafo só liga pesquisadores **já coletados** (coautores externos com ID ainda não viram nós).
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.
 - O backup em nuvem faz tarball completo dos XMLs a cada rodada (não incremental).
