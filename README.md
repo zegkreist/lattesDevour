@@ -24,6 +24,20 @@ docker compose up -d --build
 Dois containers (`app`, `db`). Tudo que importa fica no host em `./data` e sobrevive a
 `docker compose down`. As portas só escutam em `127.0.0.1`.
 
+### Container único
+
+```bash
+./single.sh                                 # build local e sobe Postgres + app num container só
+./single.sh zegkreist/lattesdevour:latest   # mesma coisa, com a imagem do Docker Hub
+./single.sh --stop
+```
+
+Usa os mesmos `./data/app` e `./data/pg` do compose (o Postgres roda como uid 999 e locale
+`en_US.UTF-8`, como na imagem oficial), por isso o script derruba o compose antes de subir:
+os dois nunca podem abrir o banco ao mesmo tempo. Cria o `.env` se não existir. A imagem é o
+estágio `single` do `Dockerfile`; o compose usa o estágio `app`. Para publicar no Docker Hub há
+um `build-and-push.sh` local (fora do git, contém credenciais).
+
 ## Captcha: leia isto
 
 O Lattes protege **a busca e o download do XML com reCAPTCHA v2, a cada currículo**
