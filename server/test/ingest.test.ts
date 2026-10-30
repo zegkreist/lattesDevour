@@ -164,4 +164,29 @@ d('ingest + busca (Postgres)', () => {
     // O 5555 volta para a fila de parse para ganhar a UF.
     expect((await pool.query(`SELECT status FROM fila WHERE lattes_id='5555555555555555'`)).rows[0].status).toBe('html');
   });
+
+  it('priorizar a rede: vinculados entram na frente e propagam o nível seguinte', async () => {
+    const { enfileirarVinculados, PRIORIDADE } = await import('../src/discovery/ids.js');
+    const fila = async (id: string) => (await pool.query(`SELECT status, prioridade, rede, nome_hint FROM fila WHERE lattes_id=$1`, [id])).rows[0];
+    await pool.query(`INSERT INTO fila (lattes_id, status, prioridade) VALUES ('7000000000000001','pendente',0)`);
+    await pool.query(`INSERT INTO fila (lattes_id, status, html_path) VALUES ('7000000000000002','parseado','/data/html/7000000000000002.html')`);
+
+    // Sem rede: comportamento antigo (fim da fila, só ganha nome).
+    await enfileirarVinculados([{ lattesId: '7000000000000003', nome: 'Sem Rede' }]);
+    expect(await fila('7000000000000003')).toMatchObject({ status: 'pendente', prioridade: PRIORIDADE.normal, rede: 0 });
+
+    // Rede de 2 níveis: novo entra com prioridade e leva 1 nível; pendente sobe; já coletado volta ao parse para propagar.
+    await enfileirarVinculados([
+      { lattesId: '7000000000000001', nome: 'Pendente' },
+      { lattesId: '7000000000000002', nome: 'Coletado' },
+      { lattesId: '7000000000000004', nome: 'Novo' },
+    ], 2);
+    expect(await fila('7000000000000004')).toMatchObject({ status: 'pendente', prioridade: PRIORIDADE.rede, rede: 1, nome_hint: 'Novo' });
+    expect(await fila('7000000000000001')).toMatchObject({ status: 'pendente', prioridade: PRIORIDADE.rede, rede: 1 });
+    expect(await fila('7000000000000002')).toMatchObject({ status: 'html', rede: 1 });
+
+    // Último nível (rede 1): entram com prioridade, mas não propagam mais.
+    await enfileirarVinculados([{ lattesId: '7000000000000005', nome: 'Fim' }], 1);
+    expect(await fila('7000000000000005')).toMatchObject({ prioridade: PRIORIDADE.rede, rede: 0 });
+  });
 });

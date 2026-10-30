@@ -9,6 +9,8 @@ export const config = {
   // Página pública do CV ({id} = ID Lattes de 16 dígitos): redireciona para visualizacv.do,
   // que pede reCAPTCHA v2. Configurável sem rebuild caso o Lattes mude.
   lattesCvUrl: env.LATTES_CV_URL || 'https://buscatextual.cnpq.br/buscatextual/cv?id={id}',
+  // Prévia do resultado da busca ({k} = ID interno K…); o abreCV() dela abre o CV com reCAPTCHA v3.
+  lattesPreviaUrl: env.LATTES_PREVIA_URL || 'https://buscatextual.cnpq.br/buscatextual/preview.do?metodo=apresentar&id={k}',
   captchaTimeoutMs: Number(env.CAPTCHA_TIMEOUT_MS ?? 10 * 60_000),
   // Com chave, o captcha é resolvido pelo 2Captcha; sem chave, por uma pessoa via noVNC.
   twoCaptcha: {

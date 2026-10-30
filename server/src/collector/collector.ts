@@ -227,13 +227,20 @@ async function esperarCV(page: Page, ms: number): Promise<string | null> {
   return null;
 }
 
-// O Lattes não serve mais o XML público (download.do responde vazio): o caminho é a página
-// do CV (cv?id= -> visualizacv.do, reCAPTCHA v2 + "Submeter"), que devolve o currículo em HTML.
+export type Caminho = 'cv' | 'previa';
+export const caminhoAtual = async (): Promise<Caminho> => ((await getSetting<string>('coleta.caminho', 'cv')) === 'previa' ? 'previa' : 'cv');
+
+// O Lattes não serve mais o XML público (download.do responde vazio). Dois caminhos até o CV em
+// HTML, escolhidos na aba Coleta (fase de testes):
+// - 'cv': link direto (cv?id= -> visualizacv.do), reCAPTCHA v2 + "Submeter" (2Captcha ou noVNC);
+// - 'previa': prévia do resultado da busca (preview.do?id=K…), cujo abreCV() usa reCAPTCHA v3
+//   invisível, como o scriptLattes. Se a prévia não abrir o CV, cai no link direto.
 async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
   const c = await contexto();
   const page = c.pages()[0] ?? (await c.newPage());
+  const urlCv = config.lattesCvUrl.replace('{id}', id);
   set('abrindo', `abrindo ${id}`, id);
-  await page.goto(config.lattesCvUrl.replace('{id}', id), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.goto(urlCv, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(1500);
 
   // ID que não existe (ou CV removido): o Lattes redireciona para erro.jsp.
@@ -243,6 +250,15 @@ async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
       [id],
     );
     return 'sem_cv';
+  }
+
+  if ((await caminhoAtual()) === 'previa') {
+    const k = new URL(page.url()).searchParams.get('id');
+    const html = k ? await pelaPrevia(c, page, id, k) : null;
+    if (html) return await salvar(id, html, 'previa');
+    set('abrindo', `prévia não abriu o CV de ${id}: tentando o link direto`, id);
+    await page.goto(urlCv, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForTimeout(1500);
   }
 
   if (await temCaptcha(page)) {
@@ -267,6 +283,24 @@ async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
     [id, `página sem captcha e sem CV (${page.url().slice(0, 120)}); salva em ${debug}`],
   );
   return 'sem_cv';
+}
+
+/** Prévia da busca -> abreCV() (abre o CV numa janela nova, com reCAPTCHA v3). null se não abrir. */
+async function pelaPrevia(c: BrowserContext, page: Page, id: string, k: string): Promise<string | null> {
+  set('abrindo', `abrindo ${id} pela prévia da busca`, id);
+  let janela: Page | null = null;
+  try {
+    await page.goto(config.lattesPreviaUrl.replace('{k}', k), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForFunction(() => typeof (globalThis as any).grecaptcha?.execute === 'function', null, { timeout: 30_000 });
+    const nova = c.waitForEvent('page', { timeout: 30_000 }).catch(() => null);
+    await page.evaluate(() => (globalThis as any).abreCV());
+    janela = await nova;
+    return await esperarCV(janela ?? page, 30_000);
+  } catch {
+    return null;
+  } finally {
+    await janela?.close().catch(() => {});
+  }
 }
 
 async function resolverAuto(page: Page, id: string, chave: string): Promise<string | null> {
@@ -306,11 +340,11 @@ function salvarDebug(id: string, html: string): string {
   return file;
 }
 
-async function salvar(id: string, html: string): Promise<'ok'> {
+async function salvar(id: string, html: string, caminho: Caminho = 'cv'): Promise<'ok'> {
   set('baixando', `salvando ${id}`, id);
   const achado = CV_RE.exec(html)?.[1];
   if (achado !== id) throw new Error(`a página aberta é do CV ${achado}, esperado ${id}; salva em ${salvarDebug(id, html)}`);
-  await saveHtml(id, html);
+  await saveHtml(id, html, caminho);
   state.baixadosNaSessao++;
   return 'ok';
 }

@@ -3,59 +3,91 @@ import { api, usePoll } from '../api';
 import { Card, fmt, when } from './ui';
 
 const FASES: Record<string, string> = {
-  baixando: 'baixando o CV agora…',
-  aguardando_captcha: 'aguardando captcha: resolva no navegador do coletor (noVNC)',
+  baixando: 'baixando agora…',
+  aguardando_captcha: 'aguardando captcha (noVNC)',
   html: 'baixado, processando…',
   baixado: 'baixado, processando…',
 };
+const ACAO: Record<string, string> = {
+  enfileirado: 'na fila',
+  em_andamento: 'já estava sendo baixado',
+  ja_coletado: 'já coletado',
+  rede_priorizada: 'já coletado; rede priorizada',
+};
 
-/** Cola o link do CV, põe no topo da fila e acompanha até o CV estar no banco. */
+/** Cola um ou vários links/IDs, põe no topo da fila e acompanha cada um até estar no banco. */
 function ColetarPorLink() {
-  const [link, setLink] = useState('');
-  const [id, setId] = useState<string | null>(null);
-  const [acao, setAcao] = useState<string | null>(null);
-  const [erro, setErro] = useState('');
+  const [texto, setTexto] = useState('');
+  const [rede, setRede] = useState(0);
+  const [pedidos, setPedidos] = useState<{ id: string; acao: string }[]>([]);
   const [st, setSt] = useState<any>(null);
+  const [msg, setMsg] = useState('');
+  const [erro, setErro] = useState('');
   useEffect(() => {
-    if (!id) return;
+    if (!pedidos.length) return;
     let vivo = true;
-    const ler = () => api(`/coletar/${id}`).then((r) => vivo && setSt(r)).catch(() => {});
+    const ler = () => api('/coletar/status', { body: { ids: pedidos.map((p) => p.id) } }).then((r) => vivo && setSt(r)).catch(() => {});
     ler();
     const t = setInterval(ler, 3000);
     return () => { vivo = false; clearInterval(t); };
-  }, [id]);
-  const coletar = (recoletar = false) => {
+  }, [pedidos]);
+  const coletar = (alvo: string, recoletar = false) => {
     setErro('');
-    api('/coletar', { body: { link: recoletar && id ? id : link, recoletar } })
-      .then((r) => { setId(r.id); setAcao(r.acao); setSt(null); setLink(''); })
+    api('/coletar', { body: { texto: alvo, recoletar, rede } })
+      .then((r) => {
+        setPedidos((ant) => recoletar ? ant.map((p) => r.itens.find((i: any) => i.id === p.id) ?? p) : r.itens);
+        if (!recoletar) {
+          setTexto('');
+          setMsg(`${fmt(r.itens.length)} ID(s) recebido(s)${r.ignoradosK ? ` · ${r.ignoradosK} link(s) com ID interno (K…) ignorado(s): use o endereço lattes.cnpq.br/<ID>` : ''}`);
+        }
+      })
       .catch((e) => setErro(e.message));
   };
-  const fim = st && (st.status === 'parseado' || st.status === 'erro' || st.status === 'sem_cv');
+  const porId = new Map<string, any>((st?.itens ?? []).map((i: any) => [i.id, i]));
+  const prontos = pedidos.filter((p) => porId.get(p.id)?.status === 'parseado').length;
   return (
-    <Card titulo="Coletar CV pelo link">
+    <Card titulo="Coletar CVs pelo link ou ID">
+      <textarea value={texto} onChange={(e) => setTexto(e.target.value)}
+        placeholder={'Um ou vários, um por linha (ou colados de qualquer jeito):\nhttp://lattes.cnpq.br/1234567890123456\n1234567890123456'} />
       <div className="row">
-        <input style={{ flex: 1, minWidth: 240 }} placeholder="http://lattes.cnpq.br/1234567890123456" value={link}
-          onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && link.trim() && coletar()} />
-        <button className="b" disabled={!link.trim()} onClick={() => coletar()}>Coletar</button>
+        <select value={rede} onChange={(e) => setRede(Number(e.target.value))} title="Depois de processar cada CV, quem aparece nele com link do Lattes também passa na frente">
+          <option value={0}>só estes CVs</option>
+          <option value={1}>+ rede (1 nível)</option>
+          <option value={2}>+ rede (2 níveis)</option>
+        </select>
+        <button className="b" disabled={!texto.trim()} onClick={() => coletar(texto)}>Coletar</button>
+        <span className="muted">{msg}</span>
       </div>
-      <p className="muted">Aceita o endereço do CV (<code>lattes.cnpq.br/&lt;ID&gt;</code>), o link <code>cv?id=</code> ou só os 16 dígitos. O CV vai para o topo da fila.</p>
+      <p className="muted">Links do CV (<code>lattes.cnpq.br/&lt;ID&gt;</code>, <code>cv?id=</code>) ou <b>só os IDs</b> (16 dígitos), um ou vários. Vão para o topo da fila, na ordem em que aparecem. Com “+ rede”, quem aparece em cada CV com link do Lattes (orientador, orientados, coautores) vem logo em seguida; 2 níveis inclui a rede deles. CV já coletado não é baixado de novo: só a rede é priorizada.</p>
       {erro && <p className="err">{erro}</p>}
-      {id && st && (
-        <p>
-          <code>{id}</code>{st.pesquisador?.nome || st.nomeHint ? <> · {st.pesquisador?.nome ?? st.nomeHint}</> : null}{' — '}
-          {acao === 'ja_coletado' && st.status !== 'pendente' ? (
-            <>já coletado ({st.status}{st.pesquisador ? `, ${fmt(st.pesquisador.obras)} obras` : ''}). <button className="b sec" onClick={() => coletar(true)}>Coletar de novo</button></>
-          ) : st.status === 'pendente' ? (
-            <>na fila, posição {fmt(st.posicao)}{st.coletorRodando ? '' : <> · <b>o coletor está parado</b>: clique em Iniciar abaixo</>}</>
-          ) : st.status === 'parseado' ? (
-            <b className="st-parseado">pronto{st.pesquisador ? `: ${fmt(st.pesquisador.obras)} obras no banco` : ''}</b>
-          ) : FASES[st.status] ? (
-            <span className="st-aguardando_captcha">{FASES[st.status]}</span>
-          ) : (
-            <span className="err">{st.status}{st.ultimoErro ? `: ${st.ultimoErro}` : ''}</span>
-          )}
-          {!fim && acao !== 'ja_coletado' && <span className="muted"> (atualiza sozinho)</span>}
-        </p>
+      {pedidos.length > 0 && st && (
+        <>
+          <p>
+            <b>{fmt(prontos)}/{fmt(pedidos.length)} prontos</b>
+            {st.redeNaFila > 0 && <> · rede: {fmt(st.redeNaFila)} CV(s) na frente da fila</>}
+            {!st.coletorRodando && pedidos.some((p) => porId.get(p.id)?.status === 'pendente') && <> · <b>o coletor está parado</b>: clique em Iniciar abaixo</>}
+          </p>
+          <table><tbody>{pedidos.map((p) => {
+            const i = porId.get(p.id) ?? {};
+            return (
+              <tr key={p.id}>
+                <td><code>{p.id}</code><br /><span className="muted">{i.nome ?? i.nomeHint ?? ''}</span></td>
+                <td>
+                  {i.status === 'parseado' ? (
+                    <span className="st-parseado">{p.acao === 'enfileirado' ? 'pronto' : ACAO[p.acao]}: {fmt(i.obras ?? 0)} obras{i.caminho ? ` (via ${i.caminho === 'previa' ? 'prévia' : 'link direto'})` : ''}</span>
+                  ) : i.status === 'pendente' ? (
+                    <>na fila, posição {fmt(i.posicao)}</>
+                  ) : FASES[i.status] ? (
+                    <span className="st-aguardando_captcha">{FASES[i.status]}</span>
+                  ) : (
+                    <span className="err">{i.status ?? '?'}{i.ultimoErro ? `: ${i.ultimoErro}` : ''}</span>
+                  )}
+                  {p.acao === 'ja_coletado' && i.status === 'parseado' && <> <button className="b sec" onClick={() => coletar(p.id, true)}>Coletar de novo</button></>}
+                </td>
+              </tr>
+            );
+          })}</tbody></table>
+        </>
       )}
     </Card>
   );
@@ -100,6 +132,16 @@ export function Coleta() {
           <button className="b sec" disabled={!c.rodando} onClick={() => api('/coletor/parar', { body: {} }).then(reload)}>Parar</button>
           <a href={novnc} target="_blank" rel="noreferrer">navegador (noVNC)</a>
         </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <span className="muted">Caminho de download (teste):</span>
+          {([['cv', 'Link direto do CV', 'captcha “não sou um robô” (v2): 2Captcha ou noVNC'], ['previa', 'Prévia da busca', 'captcha invisível (v3), como o scriptLattes; se falhar, usa o link direto']] as const).map(([v, rotulo, dica]) => (
+            <label key={v} title={dica} style={{ cursor: 'pointer' }}>
+              <input type="radio" name="caminho" checked={c.config.caminho === v}
+                onChange={() => api('/coletor/config', { method: 'PUT', body: { caminho: v } }).then(reload)} /> {rotulo}
+              <span className="muted"> ({fmt(c.porCaminho?.[v] ?? 0)} CVs)</span>
+            </label>
+          ))}
+        </div>
       </Card>
       <div className="grid g2">
         <Card titulo="Ritmo da coleta">
@@ -130,7 +172,7 @@ export function Coleta() {
           <span className="muted"> {msg}</span>
         </Card>
         <Card titulo="Adicionar IDs à fila">
-          <p className="muted">Cole qualquer texto com IDs Lattes de 16 dígitos (lista do CNPq, URLs lattes.cnpq.br/…, CSV).</p>
+          <p className="muted">Para listas grandes (ex.: a lista de IDs do CNPq), <b>sem prioridade</b>: entram no fim da fila. Para passar na frente, use “Coletar CVs pelo link ou ID” acima. Aceita qualquer texto com IDs de 16 dígitos (URLs lattes.cnpq.br/…, CSV).</p>
           <textarea value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="http://lattes.cnpq.br/1234567890123456" />
           <button className="b" disabled={!texto.trim()} onClick={async () => { const r = await api('/fila/enfileirar', { body: { texto } }); setMsg(`${r.encontrados} ID(s) no texto, ${r.novos} novo(s)`); setTexto(''); }}>Enfileirar</button>
         </Card>

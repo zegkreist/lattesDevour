@@ -18,14 +18,14 @@ export function htmlPathFor(id: string): string {
 }
 
 /** Guarda o HTML do CV (página pública) e marca a fila como 'html' até existir parser de HTML. */
-export async function saveHtml(id: string, html: string): Promise<string> {
+export async function saveHtml(id: string, html: string, caminho: 'cv' | 'previa' = 'cv'): Promise<string> {
   fs.mkdirSync(paths.html(), { recursive: true });
   const file = htmlPathFor(id);
   fs.writeFileSync(file + '.tmp', html);
   fs.renameSync(file + '.tmp', file);
   await pool.query(
-    `UPDATE fila SET status='html', html_path=$2, ultimo_erro=NULL, atualizado_em=now() WHERE lattes_id=$1`,
-    [id, file],
+    `UPDATE fila SET status='html', html_path=$2, caminho=$3, ultimo_erro=NULL, atualizado_em=now() WHERE lattes_id=$1`,
+    [id, file, caminho],
   );
   return file;
 }
@@ -56,7 +56,10 @@ export async function parseOne(id: string): Promise<{ ok: boolean; erro?: string
       : { cv: parseHtmlCV(buf.toString('utf8')), ...HTML_PARSER };
     if (cv.lattesId !== id) throw new Error(`CV é do ID ${cv.lattesId}, esperado ${id}`);
     await ingest(cv, { parser, versao, xmlSha256: sha });
-    if (cv.vinculados?.length) await enfileirarVinculados(cv.vinculados);
+    // Rede pedida no painel: propaga uma vez e zera (reprocessar depois não repropaga).
+    const rede = Number((await pool.query(`UPDATE fila f SET rede = 0 FROM (SELECT rede FROM fila WHERE lattes_id = $1) a
+      WHERE f.lattes_id = $1 RETURNING a.rede`, [id])).rows[0]?.rede ?? 0);
+    if (cv.vinculados?.length) await enfileirarVinculados(cv.vinculados, rede);
     return { ok: true };
   } catch (e) {
     const erro = e instanceof Error ? e.message : String(e);

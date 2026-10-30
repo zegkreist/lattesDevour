@@ -9,7 +9,7 @@ import { htmlPathFor, importarPasta, reprocessar, xmlPathFor } from '../collecto
 import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
 import { adicionarAlvos, buscarPorNome, descobrindo, descobrirInstituicao } from '../discovery/orcid.js';
-import { enfileirar, extrairIds } from '../discovery/ids.js';
+import { enfileirar, extrairIds, PRIORIDADE } from '../discovery/ids.js';
 import { exportarParquet } from '../exportar.js';
 import { currentParserVersion, listParsers } from '../parsers/index.js';
 import { norm, slug } from '../util/text.js';
@@ -116,46 +116,65 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     const ids = extrairIds(req.body.texto ?? '');
     return { encontrados: ids.length, novos: await enfileirar(ids, req.body.origem ?? 'lista', req.body.alvoId) };
   });
-  // ───────────── Coletar um CV pelo link (vai para o topo da fila) ─────────────
+  // ───────────── Coletar CVs pelo link ou ID (vão para o topo da fila) ─────────────
   const JA_COLETADO = ['parseado', 'html', 'baixado'];
   const EM_ANDAMENTO = ['baixando', 'aguardando_captcha'];
-  app.post<{ Body: { link: string; recoletar?: boolean } }>('/api/coletar', async (req, reply) => {
-    const link = String(req.body?.link ?? '').trim();
-    const id = /(?<!\d)(\d{16})(?!\d)/.exec(link)?.[1];
-    if (!id) {
-      const erro = /id=K\w+/i.test(link)
-        ? 'este link usa o ID interno (K…), que só vira o ID Lattes depois do captcha. Abra o CV e copie o "Endereço para acessar este CV" (http://lattes.cnpq.br/ + 16 dígitos).'
-        : 'não achei um ID Lattes (16 dígitos) no link. Use http://lattes.cnpq.br/<ID>.';
+  type Acao = 'enfileirado' | 'em_andamento' | 'ja_coletado' | 'rede_priorizada';
+  async function coletarId(id: string, rede: number, recoletar: boolean): Promise<Acao> {
+    const atual = (await pool.query(`SELECT status, xml_path, html_path FROM fila WHERE lattes_id = $1`, [id])).rows[0];
+    if (atual && EM_ANDAMENTO.includes(atual.status)) {
+      if (rede) await pool.query(`UPDATE fila SET rede = GREATEST(rede, $2) WHERE lattes_id = $1`, [id, rede]);
+      return 'em_andamento';
+    }
+    if (atual && JA_COLETADO.includes(atual.status) && !recoletar) {
+      // Já está em disco: priorizar a rede não custa captcha, só reprocessa o arquivo.
+      if (rede && (atual.xml_path || atual.html_path)) {
+        await pool.query(
+          `UPDATE fila SET rede = $2, status = CASE WHEN xml_path IS NOT NULL THEN 'baixado' ELSE 'html' END, atualizado_em = now() WHERE lattes_id = $1`,
+          [id, rede],
+        );
+        return 'rede_priorizada';
+      }
+      return 'ja_coletado';
+    }
+    await pool.query(
+      `INSERT INTO fila (lattes_id, origem, prioridade, rede) VALUES ($1, 'manual', $2, $3)
+       ON CONFLICT (lattes_id) DO UPDATE SET status = 'pendente', prioridade = $2, rede = GREATEST(fila.rede, $3), tentativas = 0, ultimo_erro = NULL, atualizado_em = now()`,
+      [id, PRIORIDADE.manual, rede],
+    );
+    return 'enfileirado';
+  }
+  // texto: um ou vários links/IDs, em qualquer formato (linhas, CSV, URLs soltas).
+  app.post<{ Body: { texto: string; recoletar?: boolean; rede?: number } }>('/api/coletar', async (req, reply) => {
+    const texto = String(req.body?.texto ?? '');
+    const rede = Math.min(Math.max(Math.round(Number(req.body?.rede) || 0), 0), 2);
+    const ids = extrairIds(texto);
+    const comK = (texto.match(/id=K\w+/gi) ?? []).length;
+    if (!ids.length) {
+      const erro = comK
+        ? 'os links usam o ID interno (K…), que só vira o ID Lattes depois do captcha. Abra o CV e copie o "Endereço para acessar este CV" (http://lattes.cnpq.br/ + 16 dígitos).'
+        : 'não achei nenhum ID Lattes (16 dígitos). Use http://lattes.cnpq.br/<ID> ou só o ID.';
       return reply.code(400).send({ erro });
     }
-    const atual = (await pool.query(`SELECT status FROM fila WHERE lattes_id = $1`, [id])).rows[0];
-    if (atual && EM_ANDAMENTO.includes(atual.status)) return { id, acao: 'em_andamento' };
-    if (atual && JA_COLETADO.includes(atual.status) && !req.body.recoletar) return { id, acao: 'ja_coletado' };
-    await pool.query(
-      `INSERT INTO fila (lattes_id, origem, prioridade) VALUES ($1, 'manual', 1)
-       ON CONFLICT (lattes_id) DO UPDATE SET status = 'pendente', prioridade = 1, tentativas = 0, ultimo_erro = NULL, atualizado_em = now()`,
-      [id],
-    );
-    return { id, acao: 'enfileirado' };
+    const itens: { id: string; acao: Acao }[] = [];
+    for (const id of ids) itens.push({ id, acao: await coletarId(id, rede, !!req.body.recoletar) });
+    return { itens, ignoradosK: comK };
   });
-  app.get<{ Params: { id: string } }>('/api/coletar/:id', async (req, reply) => {
-    const f = (await pool.query(`SELECT * FROM fila WHERE lattes_id = $1`, [req.params.id])).rows[0];
-    if (!f) return reply.code(404).send({ erro: 'ID não está na fila' });
-    const posicao = f.status === 'pendente'
-      ? Number((await pool.query(
-          `SELECT count(*) FROM fila WHERE status = 'pendente'
-             AND (prioridade > $1 OR (prioridade = $1 AND (criado_em, lattes_id) < ($2, $3)))`,
-          [f.prioridade, f.criado_em, f.lattes_id],
-        )).rows[0].count) + 1
-      : null;
-    const p = (await pool.query(
-      `SELECT p.nome, (SELECT count(*) FROM obra_fonte o WHERE o.pesquisador_id = p.id)::int AS obras FROM pesquisador p WHERE p.id = $1`,
-      [req.params.id],
-    )).rows[0] ?? null;
-    return {
-      id: f.lattes_id, status: f.status, ultimoErro: f.ultimo_erro, nomeHint: f.nome_hint, posicao, pesquisador: p,
-      coletorRodando: coletor.state.rodando, coletorAtual: coletor.state.atual,
-    };
+  // Situação de vários IDs de uma vez (o card acompanha a lista inteira).
+  app.post<{ Body: { ids: string[] } }>('/api/coletar/status', async (req) => {
+    const ids = (req.body?.ids ?? []).filter((x) => /^\d{16}$/.test(x)).slice(0, 500);
+    const { rows } = await pool.query(
+      `WITH ordem AS (
+         SELECT lattes_id, row_number() OVER (ORDER BY prioridade DESC, criado_em, lattes_id) AS posicao FROM fila WHERE status = 'pendente')
+       SELECT f.lattes_id AS id, f.status, f.ultimo_erro AS "ultimoErro", f.nome_hint AS "nomeHint", f.caminho,
+              o.posicao::int, p.nome, (SELECT count(*) FROM obra_fonte x WHERE x.pesquisador_id = p.id)::int AS obras
+       FROM fila f LEFT JOIN ordem o ON o.lattes_id = f.lattes_id LEFT JOIN pesquisador p ON p.id = f.lattes_id
+       WHERE f.lattes_id = ANY($1)`,
+      [ids],
+    );
+    const porId = new Map(rows.map((r) => [r.id, r]));
+    const redeNaFila = Number((await pool.query(`SELECT count(*) FROM fila WHERE status = 'pendente' AND prioridade = $1`, [PRIORIDADE.rede])).rows[0].count);
+    return { itens: ids.map((id) => porId.get(id) ?? { id, status: null }), coletorRodando: coletor.state.rodando, redeNaFila };
   });
 
   app.get<{ Querystring: Q }>('/api/fila', async (req) => {
@@ -187,14 +206,22 @@ export async function rotas(app: FastifyInstance): Promise<void> {
         porHoraMax: coletor.POR_HORA.max,
         // A chave nunca volta inteira para o front: só a origem e os 4 últimos caracteres.
         chave2Captcha: origem ? { origem, final: chave.slice(-4) } : null,
+        caminho: await coletor.caminhoAtual(),
       },
+      // Por onde os CVs vieram (para comparar os caminhos na fase de testes).
+      porCaminho: Object.fromEntries(
+        (await pool.query(`SELECT caminho, count(*)::int n FROM fila WHERE caminho IS NOT NULL GROUP BY 1`)).rows.map((r) => [r.caminho, r.n]),
+      ),
     };
   });
   app.post('/api/coletor/iniciar', async () => { coletor.iniciar(); return coletor.state; });
   app.post('/api/coletor/parar', async () => { coletor.parar(); return coletor.state; });
-  app.put<{ Body: { porHora: number } }>('/api/coletor/config', async (req) => {
+  app.put<{ Body: { porHora?: number; caminho?: string } }>('/api/coletor/config', async (req) => {
     const { min, max, padrao } = coletor.POR_HORA;
-    await setSetting('coleta.cvs_por_hora', Math.min(Math.max(Math.round(Number(req.body.porHora)) || padrao, min), max));
+    if (req.body.porHora !== undefined) {
+      await setSetting('coleta.cvs_por_hora', Math.min(Math.max(Math.round(Number(req.body.porHora)) || padrao, min), max));
+    }
+    if (req.body.caminho !== undefined) await setSetting('coleta.caminho', req.body.caminho === 'previa' ? 'previa' : 'cv');
     return { ok: true };
   });
   // Chave vazia apaga a do painel (volta a valer a do .env, se houver).
