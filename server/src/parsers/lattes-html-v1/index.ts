@@ -30,6 +30,12 @@ const TIPO_POR_SECAO: [RegExp, string, string | null][] = [
   [/^processos ou tecnicas/, 'processo_tecnica', null],
   [/^trabalhos tecnicos/, 'trabalho_tecnico', null],
   [/^organizacao de eventos/, 'organizacao_de_evento', null],
+  [/^redes sociais/, 'midia_social_website_blog', null],
+  // Produção artística/cultural: os mesmos nomes de elemento do XML.
+  [/^artes cenicas/, 'artes_cenicas', null],
+  [/^artes visuais/, 'artes_visuais', null],
+  [/^musica/, 'musica', null],
+  [/^outras producoes artisticas/, 'outra_producao_artistica_cultural', null],
 ];
 // Listas que misturam tipos do XML: o tipo vem do parêntese de cada item, que é o nome do
 // elemento no XML ("(Tradução/Artigo)" -> traducao, "(Programa de rádio ou TV/Entrevista)" ->
@@ -45,11 +51,11 @@ const SUBTITULOS_IGNORADOS = /^(citacoes|producao bibliografica|producao tecnica
 // Blocos h1 tratados; os demais conhecidos são ignorados de propósito (como DADOS-COMPLEMENTARES
 // no XML). Bloco fora das duas listas vai para "desconhecidos".
 const BLOCOS_TRATADOS = new Set([
-  'identificacao', 'endereco', 'formacao academica titulacao', 'atuacao profissional',
+  'identificacao', 'endereco', 'formacao academica titulacao', 'pos doutorado', 'livre docencia', 'atuacao profissional',
   'areas de atuacao', 'producoes', 'eventos', 'orientacoes',
 ]);
 const BLOCOS_IGNORADOS = new Set([
-  '', 'formacao complementar', 'projetos de pesquisa', 'projetos de extensao', 'projetos de desenvolvimento',
+  '', 'formacao complementar', 'projetos de pesquisa', 'projetos de extensao', 'projetos de desenvolvimento', 'projetos de ensino',
   'outros projetos', 'idiomas', 'premios e titulos', 'bancas', 'linhas de pesquisa', 'membro de corpo editorial',
   'revisor de periodico', 'revisor de projeto de fomento', 'outras informacoes relevantes', 'inovacao',
   'educacao e popularizacao de c t', 'patentes e registros',
@@ -73,10 +79,11 @@ function ultimoAno(s: string): number | null {
 }
 
 // Autor na citação = "SOBRENOME, prenomes", com prenomes em iniciais ("P. B."), por extenso
-// ("JUARA", "R. de F.") e/ou "(Org.)". A lista ("A ; B ; C") termina no ponto depois de um autor
-// completo: "VERDEJO, P. B.. Título", "LAGO, S. N. A. . Título", "DA CONCEIÇÃO, JUARA. Título".
+// ("JUARA", "R. de F."), por extenso com ponto ("MEIRA, Elinaldo.. Título") e/ou "(Org.)". A lista
+// ("A ; B ; C") termina no ponto depois de um autor completo: "VERDEJO, P. B.. Título",
+// "LAGO, S. N. A. . Título", "DA CONCEIÇÃO, JUARA. Título".
 // Cada token de prenome termina em fronteira de palavra, o que deixa a regex sem ambiguidade.
-const PRENOME = String.raw`(?:\p{Lu}\.|[\p{L}'’-]+(?![\p{L}'’-])|\(Orgs?\.\))`;
+const PRENOME = String.raw`(?:\p{Lu}\.|[\p{L}'’-]+\.(?=\s*[.;])|[\p{L}'’-]+(?![\p{L}'’-])|\(Orgs?\.\))`;
 const AUTOR = String.raw`[^;,.()]+,(?:\s*${PRENOME})+`;
 const AUTORES_RE = new RegExp(String.raw`^(${AUTOR}(?:\s*;\s*${AUTOR})*)\s*\.\s+(.+)$`, 'su');
 
@@ -437,7 +444,8 @@ export function parseHtmlCV(html: string): ParsedCV {
           pais: clean(local?.[3]),
         };
       }
-    } else if (ev.bloco === 'formacao academica titulacao' && ev.tipo === 'par') {
+    } else if (['formacao academica titulacao', 'pos doutorado', 'livre docencia'].includes(ev.bloco) && ev.tipo === 'par') {
+      // Pós-doutorado e livre-docência vêm em blocos próprios, no mesmo formato (como no XML, são formação).
       const ls = linhas(ev.el);
       if (!ls[0]) continue;
       const cab = norm(ls[0]);

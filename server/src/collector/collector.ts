@@ -177,6 +177,15 @@ async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
   await page.goto(config.lattesCvUrl.replace('{id}', id), { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(1500);
 
+  // ID que não existe (ou CV removido): o Lattes redireciona para erro.jsp.
+  if (/\/erro\.jsp/.test(page.url())) {
+    await pool.query(
+      `UPDATE fila SET status='sem_cv', ultimo_erro='CV não existe no Lattes (o ID redireciona para erro.jsp)', atualizado_em=now() WHERE lattes_id=$1`,
+      [id],
+    );
+    return 'sem_cv';
+  }
+
   if (await temCaptcha(page)) {
     const { chave } = await chave2Captcha();
     if (chave) {

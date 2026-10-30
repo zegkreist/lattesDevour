@@ -154,7 +154,8 @@ d('ingest + busca (Postgres)', () => {
     expect(avisos).toContain('UF MT inferida pela instituição "Universidade Federal Fictícia"');
 
     // Instituição sem UF conhecida e sem pista no nome: fica sem UF... até um CV com endereço dela chegar.
-    const novo = semEndereco.replaceAll('Universidade Federal Fictícia', 'Instituto Novo').replaceAll('Universidade de Lisboa', 'Instituto Novo');
+    const novo = semEndereco.replaceAll('Universidade Federal Fictícia', 'Instituto Novo').replaceAll('Universidade de Lisboa', 'Instituto Novo')
+      .replaceAll('Universidade Federal do Ceará', 'Instituto Novo');
     await ingest(parseHtmlCV(novo.replaceAll('1234567890123456', '5555555555555555')), { ...HTML_PARSER, xmlSha256: 'h' });
     expect((await pool.query(`SELECT uf FROM pesquisador WHERE id='5555555555555555'`)).rows[0].uf).toBeNull();
     const comEndereco = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8')

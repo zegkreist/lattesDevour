@@ -22,7 +22,9 @@ describe('parser lattes-html-v1', () => {
   });
 
   it('formação, atuação e áreas', () => {
-    expect(cv.formacao).toHaveLength(3);
+    expect(cv.formacao).toHaveLength(4);
+    // Bloco próprio "Pós-doutorado" também é formação, como no XML.
+    expect(cv.formacao[3]).toMatchObject({ nivel: 'pos_doutorado', instituicao: 'Universidade Federal do Ceará', inicio: 2019, fim: 2021 });
     expect(cv.formacao[2]).toMatchObject({ nivel: 'ensino_fundamental_primeiro_grau', instituicao: 'Escola Estadual Modelo', inicio: 1998, fim: 2005 });
     expect(cv.formacao[0]).toMatchObject({ nivel: 'pos_doutorado', instituicao: 'Universidade de Lisboa', inicio: 2023, fim: null });
     expect(cv.formacao[1]).toMatchObject({
@@ -78,7 +80,11 @@ describe('parser lattes-html-v1', () => {
     const [org] = obra('organizacao_de_evento');
     expect(org).toMatchObject({ titulo: 'III Colóquio de Letras', ano: 2022 });
     // Participação em eventos fica de fora, como no XML.
-    expect(cv.obras).toHaveLength(7);
+    expect(cv.obras).toHaveLength(8);
+    // Prenome por extenso com ponto ("MODELO, Elisa.;") ainda é autor.
+    const [, ap2] = obra('apresentacao_de_trabalho');
+    expect(ap2).toMatchObject({ titulo: 'Fotografia e sertão', subtipo: 'CONFERENCIA_OU_PALESTRA' });
+    expect(ap2.autores.map((x) => x.nome)).toEqual(['MODELO, Elisa.', 'SOUZA, A. F.']);
   });
 
   it('listas mistas: o tipo vem do parêntese (nome do elemento no XML); autores fora do padrão', () => {

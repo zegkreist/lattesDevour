@@ -66,7 +66,8 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
   clicar em Submeter. Se ninguém responder em `CAPTCHA_TIMEOUT_MS` (10 min), **pausa** a coleta e
   devolve o ID à fila.
 - **O que é salvo:** `data/app/html/<id>.html` (status `html` na fila até o parser de HTML rodar,
-  depois `parseado`). Página inesperada (nem captcha nem CV) vai para `html/_debug/` e o ID
+  depois `parseado`). ID que não existe no Lattes (redireciona para `erro.jsp`) vira `sem_cv` com essa mensagem.
+  Página inesperada (nem captcha nem CV) vai para `html/_debug/` e o ID
   fica `sem_cv` com o caminho no erro. A URL é configurável (`LATTES_CV_URL`).
 - **Ritmo:** nos dois modos, de **60 a 180 CVs por hora** (padrão 60), ajustável na aba Coleta, que
   mostra o intervalo resultante. Os CVs são espaçados de início a início (3600/N s, ±20%, mínimo de
@@ -108,8 +109,9 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   `ParsedCV`, com os mesmos tipos de obra e a mesma chave (DOI ou `tipo|título|ano`), para a obra de
   dois coautores — um vindo do XML e outro do HTML — virar uma só. Lê identificação, endereço
   profissional, formação, atuação, áreas, produções (artigos com DOI/ISSN/periódico do `cvuri`) e
-  orientações concluídas; participação em eventos e orientações em andamento ficam de fora, como
-  no XML. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
+  orientações concluídas; os blocos “Pós-doutorado” e “Livre-docência” entram na formação. Participação
+  em eventos, orientações em andamento, bancas e projetos (pesquisa, extensão, ensino,
+  desenvolvimento) ficam de fora, como no XML. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
   técnica”, “Entrevistas…”) usam o parêntese de cada item, que é o nome do elemento no XML
   (`(Tradução/Artigo)` → `traducao`). Coautor com link para o próprio Lattes já grava o ID na
   autoria, então a aresta de coautoria existe antes de coletar o CV dele. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML
