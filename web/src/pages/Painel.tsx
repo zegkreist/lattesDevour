@@ -1,8 +1,17 @@
-import { api, usePoll } from '../api';
+import { useState } from 'react';
+import { api, qs, usePoll } from '../api';
 import { Card, fmt, Kpi, when } from './ui';
 
 export function Painel() {
   const { data: s, erro, reload } = usePoll<any>('/stats', 5000);
+  const [elemento, setElemento] = useState<string | null>(null);
+  const [amostras, setAmostras] = useState<any[] | null>(null);
+  const abrir = (path: string) => {
+    if (elemento === path) return setElemento(null);
+    setElemento(path);
+    setAmostras(null);
+    api(`/desconhecidos/cvs${qs({ elemento: path })}`).then(setAmostras);
+  };
   if (erro && !s) return <p className="err">{erro}</p>;
   if (!s) return <p className="muted">Carregando…</p>;
   const f = s.fila;
@@ -27,12 +36,34 @@ export function Painel() {
           <table><tbody>
             {s.parsers.pesquisadoresPorVersao.map((v: any) => <tr key={v.versao}><td>versão {v.versao}</td><td className="num">{fmt(v.n)} CVs</td></tr>)}
           </tbody></table>
-          {velhos > 0 && <p><button className="b" onClick={() => api('/reprocessar', { body: {} }).then(reload)}>Reprocessar {fmt(velhos)} CV(s) de parser antigo</button></p>}
+          {velhos > 0 && <p><button className="b" onClick={() => api('/reprocessar', { body: {} }).then(reload)}>{fmt(velhos)} CV(s) de parser antigo: reprocessar todos</button></p>}
           <h2 style={{ marginTop: 16 }}>Elementos sem parser</h2>
           {s.desconhecidos.length === 0 ? <p className="muted">Nenhum. O formato atual está coberto.</p> : (
-            <table><tbody>{s.desconhecidos.map((d: any) => <tr key={d.path}><td><code>{d.path}</code></td><td className="num">{fmt(d.n)} CVs</td></tr>)}</tbody></table>
+            <table><tbody>{s.desconhecidos.map((d: any) => [
+              <tr key={d.path} onClick={() => abrir(d.path)} style={{ cursor: 'pointer' }} title="Ver os CVs com este elemento">
+                <td>{elemento === d.path ? '▾' : '▸'} <code>{d.path}</code></td><td className="num">{fmt(d.n)} CVs</td>
+              </tr>,
+              elemento === d.path && (
+                <tr key={d.path + ':cvs'}><td colSpan={2}>
+                  {!amostras ? <span className="muted">Carregando…</span> : (
+                    <>
+                      <p><a href={`/api/desconhecidos/zip${qs({ elemento: d.path })}`} download>Baixar todos (.zip)</a> <span className="muted">· arquivos crus do Lattes, para usar como amostra</span></p>
+                      <table><tbody>{amostras.map((c) => (
+                        <tr key={c.id}>
+                          <td>{c.nome ?? c.id}<br /><span className="muted">{c.id}</span></td>
+                          <td className="num">
+                            {c.arquivo ? <a href={`/api/cv/${c.id}/arquivo`} download>baixar .{c.arquivo}</a> : <span className="muted">sem arquivo</span>}
+                            {' · '}<a href={`http://lattes.cnpq.br/${c.id}`} target="_blank" rel="noreferrer">Lattes</a>
+                          </td>
+                        </tr>
+                      ))}</tbody></table>
+                    </>
+                  )}
+                </td></tr>
+              ),
+            ])}</tbody></table>
           )}
-          {s.desconhecidos.length > 0 && <p className="muted">Se for um tipo/formato novo, adicione um parser (README → “Adicionar um parser”) e reprocese.</p>}
+          {s.desconhecidos.length > 0 && <p className="muted">Clique num elemento para ver e baixar os CVs que o têm (amostras para escrever o parser). Depois de adicionar o parser, reprocesse (Configurações).</p>}
         </Card>
         <Card titulo="Obras por tipo">
           <table><tbody>{s.obrasPorTipo.map((t: any) => <tr key={t.tipo}><td>{t.tipo}</td><td className="num">{fmt(t.n)}</td></tr>)}</tbody></table>

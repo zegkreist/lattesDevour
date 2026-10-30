@@ -118,11 +118,13 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   orientados, coautores) entra na fila com origem `cv` e o nome como dica; quem já estava na fila
   (ex.: veio do ORCID) não duplica, só ganha o nome se não tinha.
 - Os XMLs e HTMLs crus ficam em `data/app/xml/` e `data/app/html/`, então **trocar um parser não
-  exige baixar de novo**: Configurações → “Reprocessar todos” (o que a fila conhece) ou
-  “Reprocessar HTMLs” (varre `data/app/html/` e repassa todo `<id>.html`, inclusive salvos à mão
-  do navegador).
+  exige baixar de novo**: Configurações → “Reprocessar todos” repassa todo XML/HTML em disco,
+  inclusive arquivos soltos em `data/app/html/` (ex.: salvos à mão do navegador).
 - Amostras reais de HTML em `data/amostras/<id>.html` (fora do git) entram num teste que exige
   parse sem erro, sem seção desconhecida e toda obra com autor e ano.
+- **Pegar amostras para um parser novo:** no Painel, card Parsers → “Elementos sem parser”, clique
+  no elemento: lista os CVs que o têm, com “baixar” (o XML/HTML cru) e “Baixar todos (.zip)”. Os
+  arquivos vão para `data/amostras/` e viram teste.
 
 ### Adicionar um parser
 
@@ -141,8 +143,12 @@ Colunas `*_norm` guardam texto sem acento/minúsculo (mesma função na gravaç�
 do grafo viram `tags @> ARRAY[...]`.
 
 Obras são **deduplicadas** entre CVs (por DOI ou tipo+título+ano). `obra_fonte` guarda **o que cada
-CV diz** da obra (`parser` e `dados`); `obra.dados` é a **fusão** dessas versões chave a chave, com o
-XML vencendo o HTML, e é refeita a cada (re)processamento. Campos de valor único (natureza, veículo,
+CV diz** da obra (`parser`, `dados`, `autores`, `tags`, palavras-chave e áreas), e a obra é **refeita a
+partir das fontes** a cada (re)processamento: `dados` é a fusão chave a chave (XML vence HTML); tags,
+palavras-chave e áreas são a união; a autoria é a lista da melhor fonte (XML, senão a mais
+completa) com o ID Lattes que qualquer fonte conheça para aquele nome. Por isso **reprocessar um CV
+troca só a contribuição dele** e nada velho fica (autor corrigido, UF que mudou, instituição órfã),
+sem apagar o banco. Campos de valor único (natureza, veículo,
 ISSN, idioma...) seguem a mesma regra: fonte XML sempre atualiza; HTML só quando a obra não tem
 fonte XML, senão preenche o que falta. Os detalhes usam os **nomes de atributo do XML** nas duas
 fontes (`VOLUME`, `PAGINA-INICIAL`, `NOME-DO-EVENTO`, `CIDADE-DO-EVENTO`, `NOME-DA-EDITORA`,
@@ -196,7 +202,7 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 ## Limitações conhecidas
 
 - Coleta nominal exige captcha (humano ou 2Captcha, acima); descoberta via ORCID acha o link do Lattes em só ~5% dos perfis.
-- CV em HTML sem “Endereço profissional” publicado fica sem UF (a instituição vem do vínculo atual), e não aparece nos filtros por região.
+- UF/região de quem não publica “Endereço profissional” é **inferida** pela instituição: a atual e, depois, as da formação (em andamento, depois a mais recente). Vale a UF já conhecida no banco para aquela instituição (aprendida do endereço de outro CV) ou a deduzida do nome (sigla: “USP”, “UFG”, “PUC-SP”; estado: “Universidade Federal de Goiás”). O log de parse registra “UF X inferida pela instituição Y”; quando uma instituição ganha UF, quem estava ligado a ela sem UF volta para o parse. Instituição sem pista nenhuma (“Universidade Candido Mendes”) não é adivinhada.
 - O parser de HTML foi validado em 8 CVs reais (Letras, Comunicação, Psicologia, Imunologia, Tradução/Libras, Museologia); áreas com produção muito diferente (patentes, software, produção artística) ainda não foram vistas.
 - O grafo só liga pesquisadores **já coletados** (coautores externos com ID ainda não viram nós).
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.

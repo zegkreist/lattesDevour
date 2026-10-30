@@ -2,7 +2,7 @@ import type pg from 'pg';
 import { pool } from '../db.js';
 import { currentParserVersion } from '../parsers/index.js';
 import type { ParsedCV } from '../parsers/types.js';
-import { regiaoDaUf } from '../util/regions.js';
+import { escolherUf, regiaoDaUf, ufPeloNome } from '../util/regions.js';
 import { norm, uniq } from '../util/text.js';
 import { contextoDe, tagsDaObra, tagsDoPesquisador, textoBusca } from './tags.js';
 
@@ -39,19 +39,74 @@ const preferido = (k: string) =>
   `CASE WHEN $19 OR NOT EXISTS (SELECT 1 FROM obra_fonte f WHERE f.obra_id = obra.id AND f.parser LIKE 'lattes-xml%')
      THEN COALESCE(EXCLUDED.${k}, obra.${k}) ELSE COALESCE(obra.${k}, EXCLUDED.${k}) END`;
 
-/** obra.dados = fusão do que cada CV diz, chave a chave; em conflito vence a fonte XML. */
-async function fundirDados(c: pg.PoolClient, ids: string[]): Promise<void> {
+interface AutorFonte { ordem: number; nome: string; nomeCitacao: string | null; lattesId: string | null }
+
+/**
+ * Refaz o que a obra herda das fontes (o que cada CV diz dela, em obra_fonte), para que
+ * reprocessar um CV troque só a contribuição dele e nada velho fique para trás:
+ * - dados: fusão chave a chave, em conflito vence a fonte XML;
+ * - tags, palavras-chave e áreas: união das fontes;
+ * - autoria: a lista da melhor fonte (XML; senão a mais completa), com o ID Lattes que qualquer
+ *   fonte conheça para aquele nome, e o dono de cada CV-fonte resolvido pelo próprio nome.
+ */
+async function recomputarObras(c: pg.PoolClient, ids: string[]): Promise<void> {
   if (!ids.length) return;
+  const uniao = (col: string) =>
+    `COALESCE((SELECT array_agg(DISTINCT t ORDER BY t) FROM obra_fonte f, unnest(f.${col}) t WHERE f.obra_id = o.id), '{}')`;
   await c.query(
-    `UPDATE obra o SET dados = COALESCE((
-       SELECT jsonb_object_agg(k, v) FROM (
-         SELECT DISTINCT ON (e.key) e.key AS k, e.value AS v
-         FROM obra_fonte f CROSS JOIN LATERAL jsonb_each(f.dados) e
-         WHERE f.obra_id = o.id
-         ORDER BY e.key, (f.parser LIKE 'lattes-xml%') DESC, f.pesquisador_id) x), '{}')
+    `UPDATE obra o SET
+       dados = COALESCE((
+         SELECT jsonb_object_agg(k, v) FROM (
+           SELECT DISTINCT ON (e.key) e.key AS k, e.value AS v
+           FROM obra_fonte f CROSS JOIN LATERAL jsonb_each(f.dados) e
+           WHERE f.obra_id = o.id
+           ORDER BY e.key, (f.parser LIKE 'lattes-xml%') DESC, f.pesquisador_id) x), '{}'),
+       tags = ${uniao('tags')}, palavras_chave = ${uniao('palavras_chave')},
+       grandes_areas = ${uniao('grandes_areas')}, areas = ${uniao('areas')}
      WHERE o.id = ANY($1::bigint[]) AND EXISTS (SELECT 1 FROM obra_fonte f WHERE f.obra_id = o.id)`,
     [ids],
   );
+
+  const { rows } = await c.query<{ obra_id: string; pesquisador_id: string; parser: string | null; autores: AutorFonte[]; nome: string; nomes_citacao: string[] }>(
+    `SELECT f.obra_id, f.pesquisador_id, f.parser, f.autores, p.nome, p.nomes_citacao
+     FROM obra_fonte f JOIN pesquisador p ON p.id = f.pesquisador_id WHERE f.obra_id = ANY($1::bigint[])`,
+    [ids],
+  );
+  const porObra = new Map<string, typeof rows>();
+  for (const r of rows) porObra.set(r.obra_id, [...(porObra.get(r.obra_id) ?? []), r]);
+  for (const [obraId, fontes] of porObra) {
+    fontes.sort(
+      (a, b) =>
+        Number(!!b.parser?.startsWith('lattes-xml')) - Number(!!a.parser?.startsWith('lattes-xml')) ||
+        b.autores.length - a.autores.length ||
+        a.pesquisador_id.localeCompare(b.pesquisador_id),
+    );
+    const idPorNome = new Map<string, string>();
+    for (const f of fontes) {
+      for (const a of f.autores) {
+        if (a.lattesId) for (const n of [a.nome, a.nomeCitacao]) if (n) idPorNome.set(norm(n), a.lattesId);
+      }
+      for (const n of [f.nome, ...(f.nomes_citacao ?? [])]) if (!idPorNome.has(norm(n))) idPorNome.set(norm(n), f.pesquisador_id);
+    }
+    const usados = new Set<string>();
+    const autores = fontes[0].autores.map((a) => {
+      let id = a.lattesId ?? idPorNome.get(norm(a.nome)) ?? (a.nomeCitacao ? idPorNome.get(norm(a.nomeCitacao)) : undefined) ?? null;
+      if (id && usados.has(id)) id = null; // o mesmo pesquisador não ocupa duas posições
+      if (id) usados.add(id);
+      return { ...a, lattesId: id };
+    });
+    await c.query('DELETE FROM autoria WHERE obra_id = $1', [obraId]);
+    if (autores.length) {
+      await c.query(
+        `INSERT INTO autoria (obra_id, ordem, nome, nome_norm, nome_citacao, autor_lattes_id)
+         SELECT $1, x.ordem, x.nome, x.nome_norm, x.nome_citacao, x.autor
+         FROM unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::text[]) AS x(ordem, nome, nome_norm, nome_citacao, autor)
+         ON CONFLICT DO NOTHING`,
+        [obraId, autores.map((a) => a.ordem), autores.map((a) => a.nome), autores.map((a) => norm(a.nome)),
+          autores.map((a) => a.nomeCitacao), autores.map((a) => a.lattesId)],
+      );
+    }
+  }
 }
 
 async function ingestTx(
@@ -59,7 +114,7 @@ async function ingestTx(
   cv: ParsedCV,
   meta: { parser: string; versao: number; xmlSha256: string },
 ): Promise<IngestResult> {
-  const ctx = contextoDe(cv);
+  let ctx = contextoDe(cv);
 
   await c.query(
     `INSERT INTO fila (lattes_id, status, origem) VALUES ($1, 'baixado', 'import')
@@ -70,17 +125,46 @@ async function ingestTx(
   let instId: number | null = null;
   if (cv.instituicao) {
     const i = cv.instituicao;
+    // A UF da instituição vem do endereço do CV ou, sem ele, do próprio nome ("de Goiás", "USP").
+    const ufInst = i.uf ?? ufPeloNome(i.nome);
     const r = await c.query(
-      `INSERT INTO instituicao (codigo, nome, nome_norm, uf, regiao, pais) VALUES ($1,$2,$3,$4,$5,$6)
+      `WITH antes AS (SELECT uf FROM instituicao WHERE nome_norm = $3)
+       INSERT INTO instituicao (codigo, nome, nome_norm, uf, regiao, pais) VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (nome_norm) DO UPDATE SET uf = COALESCE(EXCLUDED.uf, instituicao.uf),
          regiao = COALESCE(EXCLUDED.regiao, instituicao.regiao), codigo = COALESCE(EXCLUDED.codigo, instituicao.codigo)
-       RETURNING id`,
-      [i.codigo, i.nome, norm(i.nome), i.uf, regiaoDaUf(i.uf), i.pais],
+       RETURNING id, (SELECT uf FROM antes) AS uf_antes, uf`,
+      [i.codigo, i.nome, norm(i.nome), ufInst, regiaoDaUf(ufInst), i.pais],
     );
     instId = r.rows[0].id;
+    // A instituição acabou de ganhar UF: quem estava ligado a ela sem UF volta para o parse.
+    if (r.rows[0].uf && !r.rows[0].uf_antes) {
+      await c.query(
+        `UPDATE fila SET status = CASE WHEN xml_path IS NOT NULL THEN 'baixado' ELSE 'html' END, atualizado_em = now()
+         WHERE lattes_id <> $2 AND status = 'parseado'
+           AND lattes_id IN (SELECT id FROM pesquisador WHERE instituicao_id = $1 AND uf IS NULL)`,
+        [instId, cv.lattesId],
+      );
+    }
   }
 
-  const nomesDono = uniq([norm(cv.nome), ...cv.nomesCitacao.map(norm)]).filter(Boolean);
+  // Sem endereço profissional: UF inferida pela instituição atual e, depois, pelas da formação
+  // (em andamento primeiro, depois a mais recente). Vale a UF já conhecida no banco para a
+  // instituição (aprendida do endereço de outro CV) ou a deduzida do nome.
+  if (!ctx.uf) {
+    const formacao = [...cv.formacao].sort((a, b) =>
+      Number(b.fim == null) - Number(a.fim == null) || (Number(b.fim) || 0) - (Number(a.fim) || 0));
+    const candidatos = uniq([cv.instituicao?.nome, ...formacao.map((f) => f.instituicao as string | null)].filter((x): x is string => !!x));
+    const conhecidas = new Map<string, string>(
+      (await c.query(`SELECT nome_norm, uf FROM instituicao WHERE uf IS NOT NULL AND nome_norm = ANY($1)`, [candidatos.map(norm)]))
+        .rows.map((r) => [r.nome_norm, r.uf]),
+    );
+    const achado = escolherUf(candidatos, conhecidas, norm);
+    if (achado) {
+      ctx = { ...ctx, uf: achado.uf, regiao: regiaoDaUf(achado.uf) };
+      cv.avisos.push(`UF ${achado.uf} inferida pela instituição "${achado.instituicao}"`);
+    }
+  }
+
   const tsvPesq = norm(
     [cv.nome, cv.nomesCitacao.join(' '), cv.instituicao?.nome ?? '', cv.areas.join(' '), cv.grandesAreas.join(' ')].join(' '),
   );
@@ -121,12 +205,8 @@ async function ingestTx(
           palavras_chave, grandes_areas, areas, tags, dados, tsv)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, to_tsvector('portuguese',$18))
        ON CONFLICT (chave) DO UPDATE SET
-         tags = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.tags || EXCLUDED.tags) t), '{}'),
-         palavras_chave = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.palavras_chave || EXCLUDED.palavras_chave) t), '{}'),
-         grandes_areas = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.grandes_areas || EXCLUDED.grandes_areas) t), '{}'),
-         areas = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.areas || EXCLUDED.areas) t), '{}'),
          ${CAMPOS_SIMPLES.map((k) => `${k} = ${preferido(k)}`).join(', ')}
-       RETURNING id, (xmax = 0) AS inserted`,
+       RETURNING id`,
       [
         o.chave, o.tipo, o.subtipo, o.titulo, norm(o.titulo), o.ano, o.doi, o.idioma, o.veiculo, o.issn, o.isbn, o.pais,
         o.palavrasChave, o.grandesAreas, o.areas, tags, JSON.stringify(o.dados), textoBusca(o), doXml,
@@ -134,33 +214,14 @@ async function ingestTx(
     );
     const obraId: string = r.rows[0].id;
     tocadas.push(obraId);
+    // O que ESTE CV diz da obra; tags, autoria e dados da obra são refeitos a partir das fontes.
     await c.query(
-      `INSERT INTO obra_fonte (obra_id, pesquisador_id, parser, dados) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (obra_id, pesquisador_id) DO UPDATE SET parser = EXCLUDED.parser, dados = EXCLUDED.dados`,
-      [obraId, cv.lattesId, meta.parser, JSON.stringify(o.dados)],
-    );
-
-    // Autoria vem do primeiro CV que declarou a obra (ou do primeiro com lista não-vazia).
-    const tem = r.rows[0].inserted
-      ? false
-      : (await c.query('SELECT 1 FROM autoria WHERE obra_id=$1 LIMIT 1', [obraId])).rowCount! > 0;
-    if (!tem) {
-      for (const a of o.autores) {
-        await c.query(
-          `INSERT INTO autoria (obra_id, ordem, nome, nome_norm, nome_citacao, autor_lattes_id)
-           VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-          [obraId, a.ordem, a.nome, norm(a.nome), a.nomeCitacao, a.lattesId],
-        );
-      }
-    }
-    // O dono do CV nem sempre vem com NRO-ID-CNPQ na própria lista: resolve por nome.
-    // Só preenche autor ainda sem ID, e só com nome idêntico ao do dono (nome completo ou citação).
-    await c.query(
-      `UPDATE autoria SET autor_lattes_id = $2
-       WHERE obra_id = $1 AND autor_lattes_id IS NULL
-         AND (nome_norm = ANY($3) OR regexp_replace(lower(nome_citacao), '[^a-z0-9]+', ' ', 'g') = ANY($3))
-         AND NOT EXISTS (SELECT 1 FROM autoria x WHERE x.obra_id = $1 AND x.autor_lattes_id = $2)`,
-      [obraId, cv.lattesId, nomesDono],
+      `INSERT INTO obra_fonte (obra_id, pesquisador_id, parser, dados, autores, tags, palavras_chave, grandes_areas, areas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (obra_id, pesquisador_id) DO UPDATE SET parser = EXCLUDED.parser, dados = EXCLUDED.dados,
+         autores = EXCLUDED.autores, tags = EXCLUDED.tags, palavras_chave = EXCLUDED.palavras_chave,
+         grandes_areas = EXCLUDED.grandes_areas, areas = EXCLUDED.areas`,
+      [obraId, cv.lattesId, meta.parser, JSON.stringify(o.dados), JSON.stringify(o.autores), tags, o.palavrasChave, o.grandesAreas, o.areas],
     );
     nObras++;
   }
@@ -173,7 +234,7 @@ async function ingestTx(
     );
   }
 
-  await fundirDados(c, tocadas);
+  await recomputarObras(c, tocadas);
 
   // Obras que só este CV declarava e que sumiram dele.
   if (antigas.length) {
@@ -182,6 +243,9 @@ async function ingestTx(
       [antigas],
     );
   }
+
+  // Instituições que nenhum pesquisador usa mais (ex.: o CV mudou de instituição).
+  await c.query(`DELETE FROM instituicao i WHERE NOT EXISTS (SELECT 1 FROM pesquisador p WHERE p.instituicao_id = i.id)`);
 
   await c.query(
     `INSERT INTO parse_log (pesquisador_id, parser, versao, obras, orientacoes, desconhecidos, avisos, em)

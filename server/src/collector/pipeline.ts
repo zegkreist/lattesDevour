@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pool } from '../db.js';
 import { paths } from '../config.js';
 import { enfileirarVinculados } from '../discovery/ids.js';
-import { currentParserVersion, parseCV, parseHtmlCV, HTML_PARSER } from '../parsers/index.js';
+import { parseCV, parseHtmlCV, HTML_PARSER } from '../parsers/index.js';
 import { ingest } from '../store/ingest.js';
 import { unzipSync } from 'fflate';
 import { decodeXml, extractXml, isZip } from '../util/xmlfile.js';
@@ -79,33 +79,30 @@ export async function parsePending(limit = 50): Promise<number> {
   }
 }
 
-/** Reprocessa XML/HTML já em disco: só os de parser antigo, ou todos. É por isso que guardamos o arquivo cru. */
-export async function reprocessar(todos: boolean): Promise<number> {
-  const r = await pool.query(
-    `UPDATE fila SET status='baixado', atualizado_em=now()
-     WHERE (xml_path IS NOT NULL OR html_path IS NOT NULL) AND status IN ('parseado','erro')
-       AND ($1 OR lattes_id IN (SELECT id FROM pesquisador WHERE parser_versao < $2)
-            OR lattes_id NOT IN (SELECT id FROM pesquisador))`,
-    [todos, currentParserVersion()],
-  );
-  return r.rowCount ?? 0;
-}
-
 /**
- * Reparseia todo <id>.html de data/html, inclusive os que não estão na fila (ex.: salvos à mão
- * do navegador). Não mexe em CV que o coletor está baixando agora.
+ * Reprocessa todo XML/HTML em disco, inclusive arquivos soltos em data/xml e data/html (ex.: HTML
+ * salvo à mão do navegador). Cada CV troca só o que ele mesmo declarou (ver store/ingest.ts):
+ * nada é apagado em massa e o painel segue completo durante o reprocesso. É por isso que
+ * guardamos o arquivo cru. CV que o coletor está baixando agora é processado quando terminar.
  */
-export async function reprocessarHtml(): Promise<number> {
-  const dir = paths.html();
-  if (!fs.existsSync(dir)) return 0;
-  const ids = fs.readdirSync(dir).flatMap((f) => /^(\d{16})\.html$/.exec(f)?.[1] ?? []);
-  if (!ids.length) return 0;
-  const r = await pool.query(
+export async function reprocessar(): Promise<number> {
+  const emDisco = (dir: string, ext: string) =>
+    fs.existsSync(dir) ? fs.readdirSync(dir).flatMap((f) => new RegExp(`^(\\d{16})\\.${ext}$`).exec(f)?.[1] ?? []) : [];
+  await pool.query(
+    `INSERT INTO fila (lattes_id, status, origem, xml_path)
+     SELECT x, 'baixado', 'import', $2 || '/' || x || '.xml' FROM unnest($1::text[]) x
+     ON CONFLICT (lattes_id) DO UPDATE SET xml_path = EXCLUDED.xml_path`,
+    [emDisco(paths.xml(), 'xml'), paths.xml()],
+  );
+  await pool.query(
     `INSERT INTO fila (lattes_id, status, origem, html_path)
      SELECT x, 'html', 'import', $2 || '/' || x || '.html' FROM unnest($1::text[]) x
-     ON CONFLICT (lattes_id) DO UPDATE SET status='html', html_path=EXCLUDED.html_path, ultimo_erro=NULL, atualizado_em=now()
-     WHERE fila.status NOT IN ('baixando','aguardando_captcha')`,
-    [ids, dir],
+     ON CONFLICT (lattes_id) DO UPDATE SET html_path = EXCLUDED.html_path`,
+    [emDisco(paths.html(), 'html'), paths.html()],
+  );
+  const r = await pool.query(
+    `UPDATE fila SET status = CASE WHEN xml_path IS NOT NULL THEN 'baixado' ELSE 'html' END, ultimo_erro = NULL, atualizado_em = now()
+     WHERE (xml_path IS NOT NULL OR html_path IS NOT NULL) AND status NOT IN ('baixando', 'aguardando_captcha')`,
   );
   return r.rowCount ?? 0;
 }

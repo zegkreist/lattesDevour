@@ -100,4 +100,67 @@ d('ingest + busca (Postgres)', () => {
       { pesquisador_id: '3333333333333333', parser: 'lattes-html-v1', v: '7' },
     ]);
   });
+
+  it('autoria da obra vem da melhor fonte (XML) e o coautor com link no HTML ganha o ID', async () => {
+    const art = await pool.query(
+      `SELECT a.nome, a.autor_lattes_id FROM autoria a JOIN obra o ON o.id = a.obra_id WHERE o.doi = '10.1000/abc.123' ORDER BY a.ordem`,
+    );
+    expect(art.rows.map((r) => r.autor_lattes_id)).toEqual(['1111111111111111', '2222222222222222', '3333333333333333']);
+    const cap = await pool.query(
+      `SELECT a.nome, a.autor_lattes_id FROM autoria a JOIN obra o ON o.id = a.obra_id WHERE o.tipo = 'capitulo' AND o.titulo = 'O romance e a cidade' ORDER BY a.ordem`,
+    );
+    // LIMA tem link para o Lattes no HTML; SOUZA é a dona do CV, resolvida pelo nome de citação.
+    expect(cap.rows).toEqual([
+      { nome: 'LIMA, B. I.', autor_lattes_id: '6543210987654321' },
+      { nome: 'SOUZA, A. F.', autor_lattes_id: '3333333333333333' },
+    ]);
+  });
+
+  it('reprocessar um CV troca só a contribuição dele: nada velho fica', async () => {
+    const { parseHtmlCV, HTML_PARSER } = await import('../src/parsers/index.js');
+    // Mesma pessoa, agora em Cuiabá/MT, e o capítulo corrigido sem o coautor LIMA.
+    const html = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8')
+      .replaceAll('1234567890123456', '3333333333333333')
+      .replaceAll('10.1234/ABC.2024.1', '10.1000/ABC.123')
+      .replace('74000000 - Goiânia, GO - Brasil', '78000000 - Cuiabá, MT - Brasil')
+      .replace(/<a class="tooltip"[^>]*>LIMA, B\. I\.<\/a> ; /, '');
+    await ingest(parseHtmlCV(html), { ...HTML_PARSER, xmlSha256: 'h2' });
+
+    const tags = (await pool.query(`SELECT tags FROM obra WHERE doi='10.1000/abc.123'`)).rows[0].tags as string[];
+    // Obra compartilhada: as UFs dos três CVs, com a nova no lugar da antiga.
+    expect(tags).toEqual(expect.arrayContaining(['uf:MG', 'uf:BA', 'uf:MT']));
+    expect(tags).not.toContain('uf:GO');
+    const cap = await pool.query(
+      `SELECT a.nome FROM autoria a JOIN obra o ON o.id = a.obra_id WHERE o.tipo = 'capitulo' AND o.titulo = 'O romance e a cidade' ORDER BY a.ordem`,
+    );
+    expect(cap.rows.map((r) => r.nome)).toEqual(['SOUZA, A. F.']);
+    // A instituição em GO só era usada por este CV e ficou órfã.
+    expect((await pool.query(`SELECT count(*)::int n FROM instituicao WHERE uf = 'GO'`)).rows[0].n).toBe(0);
+    // Os outros dois CVs continuam declarando o artigo, com os mesmos autores.
+    const fontes = (await pool.query(`SELECT count(*)::int n FROM obra_fonte f JOIN obra o ON o.id = f.obra_id WHERE o.doi='10.1000/abc.123'`)).rows[0].n;
+    expect(fontes).toBe(3);
+  });
+
+  it('sem endereço profissional, a UF vem da instituição (a já conhecida no banco)', async () => {
+    const { parseHtmlCV, HTML_PARSER } = await import('../src/parsers/index.js');
+    const semEndereco = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8')
+      .replace(/<div class="title-wrapper"><a name="Endereco">[\s\S]*?(?=<div class="title-wrapper"><a name="FormacaoAcademicaTitulacao">)/, '');
+    // "Universidade Federal Fictícia" já tem UF no banco (MT, do CV 3333 com endereço).
+    await ingest(parseHtmlCV(semEndereco.replaceAll('1234567890123456', '4444444444444444')), { ...HTML_PARSER, xmlSha256: 'h' });
+    const p = (await pool.query(`SELECT uf, regiao, tags FROM pesquisador WHERE id='4444444444444444'`)).rows[0];
+    expect(p).toMatchObject({ uf: 'MT', regiao: 'centro-oeste' });
+    expect(p.tags).toEqual(expect.arrayContaining(['uf:MT', 'regiao:centro-oeste']));
+    const avisos = (await pool.query(`SELECT avisos FROM parse_log WHERE pesquisador_id='4444444444444444'`)).rows[0].avisos;
+    expect(avisos).toContain('UF MT inferida pela instituição "Universidade Federal Fictícia"');
+
+    // Instituição sem UF conhecida e sem pista no nome: fica sem UF... até um CV com endereço dela chegar.
+    const novo = semEndereco.replaceAll('Universidade Federal Fictícia', 'Instituto Novo').replaceAll('Universidade de Lisboa', 'Instituto Novo');
+    await ingest(parseHtmlCV(novo.replaceAll('1234567890123456', '5555555555555555')), { ...HTML_PARSER, xmlSha256: 'h' });
+    expect((await pool.query(`SELECT uf FROM pesquisador WHERE id='5555555555555555'`)).rows[0].uf).toBeNull();
+    const comEndereco = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8')
+      .replaceAll('Universidade Federal Fictícia', 'Instituto Novo').replaceAll('1234567890123456', '6666666666666666');
+    await ingest(parseHtmlCV(comEndereco), { ...HTML_PARSER, xmlSha256: 'h' });
+    // O 5555 volta para a fila de parse para ganhar a UF.
+    expect((await pool.query(`SELECT status FROM fila WHERE lattes_id='5555555555555555'`)).rows[0].status).toBe('html');
+  });
 });

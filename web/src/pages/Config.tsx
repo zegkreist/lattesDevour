@@ -28,12 +28,8 @@ export function Config() {
         ) : <p className="muted">Nenhuma exportação ainda.</p>}
       </Card>
       <Card titulo="Reprocessar">
-        <p className="muted">Reaplica o parser a todos os XMLs e HTMLs já em disco (sem baixar nada). Use depois de mudar um parser.</p>
-        <div className="row">
-          <button className="b sec" onClick={() => confirm('Reprocessar TODOS os CVs?') && api('/reprocessar', { body: { todos: true } }).then((r) => setMsgRep(`${fmt(r.reenfileirados)} CV(s) na fila de parse`))}>Reprocessar todos</button>
-          <button className="b sec" onClick={() => api('/reprocessar-html', { body: {} }).then((r) => setMsgRep(`${fmt(r.reenfileirados)} HTML(s) na fila de parse`))}>Reprocessar HTMLs</button>
-        </div>
-        <p className="muted">“Reprocessar HTMLs” varre a pasta <code>data/html</code> e repassa todo <code>&lt;id&gt;.html</code>, inclusive os que não estão na fila (ex.: salvos à mão do navegador).</p>
+        <p className="muted">Repassa o parser em todos os XML/HTML em disco, inclusive arquivos soltos em <code>data/html</code> (ex.: salvos à mão do navegador), sem baixar nada. Cada CV troca só o que ele mesmo declarou: autoria, tags e detalhes das obras são refeitos a partir de todos os CVs que as citam. Use depois de atualizar o app.</p>
+        <button className="b sec" onClick={() => confirm('Reprocessar TODOS os CVs em disco?') && api('/reprocessar', { body: {} }).then((r) => setMsgRep(`${fmt(r.reenfileirados)} CV(s) na fila de parse`)).catch((e) => setMsgRep(e.message))}>Reprocessar todos</button>
         <p>{msgRep}</p>
       </Card>
       <Card titulo="Sobre captcha">

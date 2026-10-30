@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { zipSync } from 'fflate';
 import { fazerBackup } from '../backup.js';
 import { config, paths } from '../config.js';
 import * as coletor from '../collector/collector.js';
-import { importarPasta, reprocessar, reprocessarHtml } from '../collector/pipeline.js';
+import { htmlPathFor, importarPasta, reprocessar, xmlPathFor } from '../collector/pipeline.js';
 import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
 import { adicionarAlvos, buscarPorNome, descobrindo, descobrirInstituicao } from '../discovery/orcid.js';
@@ -170,8 +171,42 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     }
   });
   app.post('/api/importar-pasta', async () => importarPasta());
-  app.post('/api/reprocessar-html', async () => ({ reenfileirados: await reprocessarHtml() }));
-  app.post<{ Body: { todos?: boolean } }>('/api/reprocessar', async (req) => ({ reenfileirados: await reprocessar(!!req.body?.todos) }));
+  app.post('/api/reprocessar', async () => ({ reenfileirados: await reprocessar() }));
+
+  // ───────────── Amostras: CVs com elementos sem parser, para baixar e virar exemplo ─────────────
+  // O arquivo é o que foi parseado (XML se houver, senão HTML), cru como veio do Lattes.
+  const arquivoDoCv = (id: string): string | null =>
+    [xmlPathFor(id), htmlPathFor(id)].find((f) => fs.existsSync(f)) ?? null;
+  const cvsComElemento = async (elemento: string) =>
+    (await pool.query<{ id: string; nome: string | null }>(
+      `SELECT l.pesquisador_id AS id, p.nome FROM parse_log l LEFT JOIN pesquisador p ON p.id = l.pesquisador_id
+       WHERE l.desconhecidos ? $1 ORDER BY p.nome LIMIT 200`,
+      [elemento],
+    )).rows;
+  app.get<{ Querystring: { elemento: string } }>('/api/desconhecidos/cvs', async (req) =>
+    (await cvsComElemento(req.query.elemento ?? '')).map((c) => ({ ...c, arquivo: arquivoDoCv(c.id) ? path.extname(arquivoDoCv(c.id)!).slice(1) : null })),
+  );
+  app.get<{ Params: { id: string } }>('/api/cv/:id/arquivo', async (req, reply) => {
+    if (!/^\d{16}$/.test(req.params.id)) return reply.code(400).send({ erro: 'ID Lattes inválido' });
+    const f = arquivoDoCv(req.params.id);
+    if (!f) return reply.code(404).send({ erro: 'arquivo do CV não está em disco' });
+    return reply
+      .header('Content-Type', f.endsWith('.xml') ? 'application/xml' : 'text/html; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${path.basename(f)}"`)
+      .send(fs.createReadStream(f));
+  });
+  app.get<{ Querystring: { elemento: string } }>('/api/desconhecidos/zip', async (req, reply) => {
+    const arquivos: Record<string, Uint8Array> = {};
+    for (const c of await cvsComElemento(req.query.elemento ?? '')) {
+      const f = arquivoDoCv(c.id);
+      if (f) arquivos[path.basename(f)] = fs.readFileSync(f);
+    }
+    if (!Object.keys(arquivos).length) return reply.code(404).send({ erro: 'nenhum arquivo em disco para este elemento' });
+    return reply
+      .header('Content-Type', 'application/zip')
+      .header('Content-Disposition', `attachment; filename="amostras-${slug(req.query.elemento) || 'cvs'}.zip"`)
+      .send(Buffer.from(zipSync(arquivos, { level: 6 })));
+  });
   app.post('/api/backup', async () => fazerBackup());
   app.post('/api/exportar', async () => exportarParquet());
   app.get('/api/exportar', async () => {
