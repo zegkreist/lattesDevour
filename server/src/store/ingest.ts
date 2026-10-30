@@ -13,21 +13,29 @@ export interface IngestResult {
 
 // Grava um CV parseado numa transação. Idempotente: reprocessar o mesmo CV (ex.: parser
 // novo) substitui o que o CV declarava, sem duplicar obras que outros CVs também declaram.
+// Com o parse em paralelo, dois CVs que compartilham obras podem se cruzar nos locks
+// (deadlock), na serialização ou ao apagar uma instituição órfã que o outro acabou de usar
+// (FK). São transitórios: a transação inteira é refeita.
+const TRANSITORIOS = new Set(['40P01', '40001', '23503', '23505']);
+
 export async function ingest(
   cv: ParsedCV,
   meta: { parser: string; versao: number; xmlSha256: string },
 ): Promise<IngestResult> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const r = await ingestTx(client, cv, meta);
-    await client.query('COMMIT');
-    return r;
-  } catch (e) {
-    await client.query('ROLLBACK');
-    throw e;
-  } finally {
-    client.release();
+  for (let tentativa = 1; ; tentativa++) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await ingestTx(client, structuredClone(cv), meta);
+      await client.query('COMMIT');
+      return r;
+    } catch (e) {
+      await client.query('ROLLBACK');
+      if (tentativa >= 4 || !TRANSITORIOS.has((e as { code?: string }).code ?? '')) throw e;
+      await new Promise((r) => setTimeout(r, 50 * tentativa + Math.random() * 100));
+    } finally {
+      client.release();
+    }
   }
 }
 
@@ -74,7 +82,7 @@ async function recomputarObras(c: pg.PoolClient, ids: string[]): Promise<void> {
   );
   const porObra = new Map<string, typeof rows>();
   for (const r of rows) porObra.set(r.obra_id, [...(porObra.get(r.obra_id) ?? []), r]);
-  for (const [obraId, fontes] of porObra) {
+  for (const [obraId, fontes] of [...porObra].sort((a, b) => Number(a[0]) - Number(b[0]))) {
     fontes.sort(
       (a, b) =>
         Number(!!b.parser?.startsWith('lattes-xml')) - Number(!!a.parser?.startsWith('lattes-xml')) ||
@@ -196,7 +204,8 @@ async function ingestTx(
   const tocadas: string[] = [...antigas];
   const doXml = meta.parser.startsWith('lattes-xml');
   let nObras = 0;
-  for (const o of cv.obras) {
+  // Ordem fixa (pela chave): dois CVs gravando em paralelo travam as obras na mesma ordem.
+  for (const o of [...cv.obras].sort((a, b) => (a.chave < b.chave ? -1 : a.chave > b.chave ? 1 : 0))) {
     if (vistas.has(o.chave)) continue; // o mesmo CV repete a obra (ex.: DOI igual)
     vistas.add(o.chave);
     const tags = tagsDaObra(o, ctx);

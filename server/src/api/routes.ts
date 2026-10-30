@@ -189,9 +189,16 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     );
     return r.rows;
   });
+  // CV com arquivo em disco que falhou no parse volta para o parse, não para o download
+  // (baixar de novo gastaria um captcha à toa). Só vai para o download quem não tem arquivo.
   app.post('/api/fila/retry-erros', async () => {
-    const r = await pool.query(`UPDATE fila SET status='pendente', tentativas=0, atualizado_em=now() WHERE status IN ('erro','sem_cv') AND xml_path IS NULL`);
-    return { reenfileirados: r.rowCount };
+    const r = await pool.query(
+      `UPDATE fila SET status = CASE WHEN xml_path IS NOT NULL THEN 'baixado' WHEN html_path IS NOT NULL THEN 'html' ELSE 'pendente' END,
+         tentativas = 0, ultimo_erro = NULL, atualizado_em = now()
+       WHERE status IN ('erro', 'sem_cv') RETURNING status`,
+    );
+    const download = r.rows.filter((x) => x.status === 'pendente').length;
+    return { reenfileirados: download, reprocessados: r.rows.length - download };
   });
 
   // ───────────── Coletor / import / reprocesso ─────────────

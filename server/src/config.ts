@@ -12,6 +12,8 @@ export const config = {
   // Prévia do resultado da busca ({k} = ID interno K…); o abreCV() dela abre o CV com reCAPTCHA v3.
   lattesPreviaUrl: env.LATTES_PREVIA_URL || 'https://buscatextual.cnpq.br/buscatextual/preview.do?metodo=apresentar&id={k}',
   captchaTimeoutMs: Number(env.CAPTCHA_TIMEOUT_MS ?? 10 * 60_000),
+  // CVs processados (parse + gravação) ao mesmo tempo. O pool do Postgres tem 10 conexões.
+  parseConcorrencia: Math.min(Math.max(Number(env.PARSE_CONCORRENCIA) || 4, 1), 8),
   // Com chave, o captcha é resolvido pelo 2Captcha; sem chave, por uma pessoa via noVNC.
   twoCaptcha: {
     apiKey: env.TWOCAPTCHA_API_KEY ?? '',

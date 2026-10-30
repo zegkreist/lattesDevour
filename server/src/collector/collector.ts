@@ -33,7 +33,8 @@ export const state: CollectorState = {
   novncUrl: config.novncUrl,
 };
 
-export const POR_HORA = { min: 60, max: 180, padrao: 60 };
+// Teto de 600/h (1 CV a cada 6 s, na ordem do scriptLattes): educado com o servidor do CNPq.
+export const POR_HORA = { min: 60, max: 600, padrao: 60 };
 
 export async function cvsPorHora(): Promise<number> {
   const v = Number(await getSetting<number>('coleta.cvs_por_hora', POR_HORA.padrao));
@@ -203,9 +204,9 @@ async function loop(): Promise<void> {
       );
     }
     // Um CV a cada 3600/N s (±20%), de início a início; se o CV demorou mais que isso,
-    // ainda respira 5 s. O teto por hora acima é só a trava.
+    // ainda respira 2 s. O teto por hora acima é só a trava.
     const intervalo = 3600_000 / maxPorHora;
-    await esperar(Math.max(5000, inicio + intervalo * (0.8 + Math.random() * 0.4) - Date.now()));
+    await esperar(Math.max(2000, inicio + intervalo * (0.8 + Math.random() * 0.4) - Date.now()));
   }
 }
 
@@ -222,7 +223,7 @@ async function esperarCV(page: Page, ms: number): Promise<string | null> {
   while (state.rodando && Date.now() < fim) {
     const html = await page.content().catch(() => '');
     if (html && CV_RE.test(html) && !(await temCaptcha(page).catch(() => true))) return html;
-    await sleep(2000);
+    await sleep(500);
   }
   return null;
 }
@@ -239,9 +240,11 @@ async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
   const c = await contexto();
   const page = c.pages()[0] ?? (await c.newPage());
   const urlCv = config.lattesCvUrl.replace('{id}', id);
+  const caminho = await caminhoAtual();
   set('abrindo', `abrindo ${id}`, id);
   await page.goto(urlCv, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await page.waitForTimeout(1500);
+  // O link direto espera o widget do captcha aparecer; na prévia só interessa o ID K… do redirecionamento.
+  if (caminho === 'cv') await page.waitForTimeout(1500);
 
   // ID que não existe (ou CV removido): o Lattes redireciona para erro.jsp.
   if (/\/erro\.jsp/.test(page.url())) {
@@ -252,7 +255,7 @@ async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
     return 'sem_cv';
   }
 
-  if ((await caminhoAtual()) === 'previa') {
+  if (caminho === 'previa') {
     const k = new URL(page.url()).searchParams.get('id');
     const html = k ? await pelaPrevia(c, page, id, k) : null;
     if (html) return await salvar(id, html, 'previa');

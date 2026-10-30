@@ -189,4 +189,21 @@ d('ingest + busca (Postgres)', () => {
     await enfileirarVinculados([{ lattesId: '7000000000000005', nome: 'Fim' }], 1);
     expect(await fila('7000000000000005')).toMatchObject({ prioridade: PRIORIDADE.rede, rede: 0 });
   });
+
+  it('gravação em paralelo de CVs que compartilham obras: sem deadlock e sem duplicar', async () => {
+    const { parseHtmlCV, HTML_PARSER } = await import('../src/parsers/index.js');
+    const base = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8');
+    const ids = Array.from({ length: 6 }, (_, n) => `880000000000000${n}`);
+    for (let rodada = 0; rodada < 3; rodada++) {
+      await Promise.all(ids.map((id) => ingest(parseHtmlCV(base.replaceAll('1234567890123456', id)), { ...HTML_PARSER, xmlSha256: 'p' })));
+    }
+    // Todos declaram as mesmas obras: cada uma existe uma vez, com uma fonte por CV.
+    const r = await pool.query(
+      `SELECT o.chave, count(f.*)::int AS fontes FROM obra o JOIN obra_fonte f ON f.obra_id = o.id
+       WHERE f.pesquisador_id = ANY($1) GROUP BY o.chave`, [ids],
+    );
+    expect(r.rows.length).toBeGreaterThan(0);
+    for (const x of r.rows) expect(x.fontes).toBe(ids.length);
+    expect((await pool.query(`SELECT count(*)::int n FROM parse_log WHERE pesquisador_id = ANY($1)`, [ids])).rows[0].n).toBe(ids.length);
+  });
 });

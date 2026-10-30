@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pool } from '../db.js';
-import { paths } from '../config.js';
+import { config, paths } from '../config.js';
 import { enfileirarVinculados } from '../discovery/ids.js';
 import { parseCV, parseHtmlCV, HTML_PARSER } from '../parsers/index.js';
 import { ingest } from '../store/ingest.js';
@@ -69,13 +69,21 @@ export async function parseOne(id: string): Promise<{ ok: boolean; erro?: string
 }
 
 let parsing = false;
-/** Processa o que está 'baixado' (XML) ou 'html'. Roda em loop curto; reentrância bloqueada. */
-export async function parsePending(limit = 50): Promise<number> {
+/**
+ * Processa o que está 'baixado' (XML) ou 'html', com config.parseConcorrencia CVs ao mesmo tempo
+ * (o trabalho é quase todo espera do banco). Roda em loop curto; reentrância bloqueada.
+ */
+export async function parsePending(limit = 200): Promise<number> {
   if (parsing) return 0;
   parsing = true;
   try {
     const { rows } = await pool.query(`SELECT lattes_id FROM fila WHERE status IN ('baixado','html') ORDER BY atualizado_em LIMIT $1`, [limit]);
-    for (const r of rows) await parseOne(r.lattes_id);
+    let i = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(config.parseConcorrencia, rows.length) }, async () => {
+        while (i < rows.length) await parseOne(rows[i++].lattes_id);
+      }),
+    );
     return rows.length;
   } finally {
     parsing = false;

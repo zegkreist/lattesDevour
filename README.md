@@ -44,7 +44,7 @@ um `build-and-push.sh` local (fora do git, contém credenciais).
 2. No ZimaOS: App Store → “+” → Instalar app personalizado → Importar → cole
    [`zimaos/docker-compose.yml`](zimaos/docker-compose.yml), **trocando as duas senhas**.
 3. Painel em `http://<ip-do-zima>:8080`; o link do noVNC no painel aponta para o mesmo host,
-   porta 6080 (defina `NOVNC_URL` se mapear outra porta). Chave do 2Captcha e ritmo: aba Coleta.
+   porta 6080 (defina `NOVNC_URL` se mapear outra porta). Ritmo e caminho: aba Coleta; chave do 2Captcha: Configurações.
 
 Dados em `/media/firstBlood/lattesdevour/{app,pg}` (ajuste no compose se usar outro disco). Diferente do setup local, as portas ficam abertas
 na rede de casa e o painel não tem login: não exponha o NAS para a internet com essas portas.
@@ -61,7 +61,7 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
   v2) ou “Prévia da busca” (`preview.do?id=K…` → `abreCV()`, reCAPTCHA v3 invisível, o fluxo do
   scriptLattes; se não abrir o CV, cai no link direto). A fila guarda por qual caminho cada CV veio
   (`fila.caminho`) e a aba mostra a contagem. A prévia não foi testada contra o Lattes neste ambiente.
-- **Modo automático (2Captcha):** com a chave cadastrada na aba Coleta (validada pelo saldo antes
+- **Modo automático (2Captcha):** com a chave cadastrada em Configurações (validada pelo saldo antes
   de salvar; a do painel vale sobre `TWOCAPTCHA_API_KEY` do `.env`), o coletor manda o reCAPTCHA
   (sitekey + URL) para o 2Captcha, põe o token no formulário e submete. Se o CV não abrir, cai
   para o modo humano abaixo. Chave inválida, saldo zerado ou IP bloqueado no 2Captcha **pausam** a
@@ -73,16 +73,16 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
   depois `parseado`). ID que não existe no Lattes (redireciona para `erro.jsp`) vira `sem_cv` com essa mensagem.
   Página inesperada (nem captcha nem CV) vai para `html/_debug/` e o ID
   fica `sem_cv` com o caminho no erro. A URL é configurável (`LATTES_CV_URL`).
-- **Ritmo:** nos dois modos, de **60 a 180 CVs por hora** (padrão 60), ajustável na aba Coleta, que
+- **Ritmo:** nos dois modos, de **60 a 600 CVs por hora** (padrão 60; 600/h = 1 CV a cada 6 s), na aba Coleta, que
   mostra o intervalo resultante. Os CVs são espaçados de início a início (3600/N s, ±20%, mínimo de
-  5 s entre um e outro) e uma janela deslizante de 1 h serve de trava. Custo de referência do
+  2 s entre um e outro) e uma janela deslizante de 1 h serve de trava. Custo de referência do
   2Captcha: alguns dólares por mil captchas, ou seja, uns US$ 4–5/dia a 60/h rodando 24 h.
 - Para volume (o Brasil inteiro) o caminho é o **Extrator Lattes do CNPq** (web service para
   instituições de ensino/pesquisa; pedido por `atendimento@cnpq.br`, assunto “Solicitação de
   acesso ao Lattes Extrator”). O que ele entregar (`.xml` ou `.zip`) é só soltar em
   `data/app/import/`: entra no parser de XML, sem captcha.
 - O CNPq publica a lista de IDs de todos os currículos
-  (<https://memoria.cnpq.br/web/portal-lattes/extracoes-de-dados>). Cole na aba Coleta → “Adicionar IDs”.
+  (<https://memoria.cnpq.br/web/portal-lattes/extracoes-de-dados>). Cole na aba Coleta → “Adicionar CVs” com destino “fim da fila”.
 
 > **Não verificado:** a resolução pelo 2Captcha de ponta a ponta (token aceito pelo Lattes) e o
 > formato do HTML do CV; até então o fluxo foi conferido até o captcha (sitekey, formulário e campos).
@@ -91,10 +91,10 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
 
 | Fonte | Como | Cobertura |
 |---|---|---|
-| CVs específicos | aba Coleta → “Coletar CVs pelo link ou ID”: um ou vários links (`lattes.cnpq.br/<ID>`, `cv?id=`) ou IDs de 16 dígitos; vão para o **topo da fila** na ordem colada e o card acompanha cada um até estar no banco. **“+ rede”** (1 ou 2 níveis): quem aparece no CV com link do Lattes (orientador, orientados, coautores) vem logo depois; CV já coletado não é baixado de novo, só reprocessado para priorizar a rede. Link com ID interno (`visualizacv.do?id=K…`) não serve | prioridade: pedido > rede > resto |
-| Lista de IDs | aba Coleta → colar texto (aceita URLs `lattes.cnpq.br/<id>`, CSV, lista do CNPq) | o que você tiver |
+| CVs específicos | aba Coleta → “Adicionar CVs” (destino “topo da fila” ou “topo + rede”): um ou vários links (`lattes.cnpq.br/<ID>`, `cv?id=`) ou IDs de 16 dígitos; vão para o **topo da fila** na ordem colada e o card acompanha cada um até estar no banco. **“+ rede”** (1 ou 2 níveis): quem aparece no CV com link do Lattes (orientador, orientados, coautores) vem logo depois; CV já coletado não é baixado de novo, só reprocessado para priorizar a rede. Link com ID interno (`visualizacv.do?id=K…`) não serve | prioridade: pedido > rede > resto |
+| Lista de IDs | aba Coleta → “Adicionar CVs” com destino “fim da fila” (aceita URLs `lattes.cnpq.br/<id>`, CSV, lista do CNPq) | o que você tiver |
 | Instituições-alvo + ORCID | aba Instituições → lista de nomes → “Descobrir” (API pública do ORCID por afiliação; lê o link do Lattes no perfil) | só quem declarou o Lattes no ORCID (taxa varia) |
-| Nome (+ instituição) | aba Coleta → “Achar pesquisador por nome” (mesma fonte) | idem |
+| Nome (+ instituição) | aba Instituições → “Pesquisador por nome (ORCID)” (mesma fonte) | idem |
 | XMLs do Extrator | soltar em `data/app/import/` | o que o CNPq liberar |
 
 A busca nativa do Lattes (por nome/instituição) também exige captcha e não foi automatizada.
@@ -174,6 +174,11 @@ Diário às `BACKUP_HOUR` (Brasília), mais o botão em Configurações: `pg_dum
 em `data/app/backups/` (mantém os últimos `BACKUP_KEEP`). Se `BACKUP_S3_BUCKET` e as credenciais
 AWS estiverem no `.env`, sobe também para `s3://BUCKET/PREFIXO`. Recoletar um XML custa um captcha,
 então o tarball dos XMLs vale tanto quanto o dump. Restaurar: `pg_restore -d lattes arquivo.dump`.
+
+**Parse em paralelo:** o pipeline processa `PARSE_CONCORRENCIA` CVs ao mesmo tempo (padrão 4, máx. 8;
+o pool do Postgres tem 10 conexões). Cada CV grava as obras em ordem fixa (pela chave), e conflitos
+transitórios entre CVs que compartilham obras (deadlock, FK de instituição órfã) refazem a transação
+sozinhos, até 4 vezes.
 
 ## Cópia em Parquet (sem senha)
 
