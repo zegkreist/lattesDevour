@@ -1,6 +1,65 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, usePoll } from '../api';
 import { Card, fmt, when } from './ui';
+
+const FASES: Record<string, string> = {
+  baixando: 'baixando o CV agora…',
+  aguardando_captcha: 'aguardando captcha: resolva no navegador do coletor (noVNC)',
+  html: 'baixado, processando…',
+  baixado: 'baixado, processando…',
+};
+
+/** Cola o link do CV, põe no topo da fila e acompanha até o CV estar no banco. */
+function ColetarPorLink() {
+  const [link, setLink] = useState('');
+  const [id, setId] = useState<string | null>(null);
+  const [acao, setAcao] = useState<string | null>(null);
+  const [erro, setErro] = useState('');
+  const [st, setSt] = useState<any>(null);
+  useEffect(() => {
+    if (!id) return;
+    let vivo = true;
+    const ler = () => api(`/coletar/${id}`).then((r) => vivo && setSt(r)).catch(() => {});
+    ler();
+    const t = setInterval(ler, 3000);
+    return () => { vivo = false; clearInterval(t); };
+  }, [id]);
+  const coletar = (recoletar = false) => {
+    setErro('');
+    api('/coletar', { body: { link: recoletar && id ? id : link, recoletar } })
+      .then((r) => { setId(r.id); setAcao(r.acao); setSt(null); setLink(''); })
+      .catch((e) => setErro(e.message));
+  };
+  const fim = st && (st.status === 'parseado' || st.status === 'erro' || st.status === 'sem_cv');
+  return (
+    <Card titulo="Coletar CV pelo link">
+      <div className="row">
+        <input style={{ flex: 1, minWidth: 240 }} placeholder="http://lattes.cnpq.br/1234567890123456" value={link}
+          onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && link.trim() && coletar()} />
+        <button className="b" disabled={!link.trim()} onClick={() => coletar()}>Coletar</button>
+      </div>
+      <p className="muted">Aceita o endereço do CV (<code>lattes.cnpq.br/&lt;ID&gt;</code>), o link <code>cv?id=</code> ou só os 16 dígitos. O CV vai para o topo da fila.</p>
+      {erro && <p className="err">{erro}</p>}
+      {id && st && (
+        <p>
+          <code>{id}</code>{st.pesquisador?.nome || st.nomeHint ? <> · {st.pesquisador?.nome ?? st.nomeHint}</> : null}{' — '}
+          {acao === 'ja_coletado' && st.status !== 'pendente' ? (
+            <>já coletado ({st.status}{st.pesquisador ? `, ${fmt(st.pesquisador.obras)} obras` : ''}). <button className="b sec" onClick={() => coletar(true)}>Coletar de novo</button></>
+          ) : st.status === 'pendente' ? (
+            <>na fila, posição {fmt(st.posicao)}{st.coletorRodando ? '' : <> · <b>o coletor está parado</b>: clique em Iniciar abaixo</>}</>
+          ) : st.status === 'parseado' ? (
+            <b className="st-parseado">pronto{st.pesquisador ? `: ${fmt(st.pesquisador.obras)} obras no banco` : ''}</b>
+          ) : FASES[st.status] ? (
+            <span className="st-aguardando_captcha">{FASES[st.status]}</span>
+          ) : (
+            <span className="err">{st.status}{st.ultimoErro ? `: ${st.ultimoErro}` : ''}</span>
+          )}
+          {!fim && acao !== 'ja_coletado' && <span className="muted"> (atualiza sozinho)</span>}
+        </p>
+      )}
+    </Card>
+  );
+}
 
 export function Coleta() {
   const { data: c, reload } = usePoll<any>('/coletor', 2000);
@@ -29,6 +88,7 @@ export function Coleta() {
     <div className="grid">
       {esperando && <div className="banner"><b>Captcha aguardando:</b> {c.mensagem}. <a href={novnc} target="_blank" rel="noreferrer">Abrir o navegador do coletor (noVNC)</a>, resolva o reCAPTCHA e confirme o download; o app segue sozinho.</div>}
       {c.fase === 'pausado' && <div className="banner">{c.mensagem}</div>}
+      <ColetarPorLink />
       <Card titulo="Coletor">
         <p>Estado: <b className={esperando ? 'st-aguardando_captcha' : ''}>{c.rodando ? c.fase : 'parado'}</b> {c.atual && <>· {c.atual}</>} · baixados nesta sessão: {c.baixadosNaSessao}</p>
         <p className="muted">O Lattes exige reCAPTCHA a cada currículo. {c.captchaAuto

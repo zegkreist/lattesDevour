@@ -87,6 +87,7 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
 
 | Fonte | Como | Cobertura |
 |---|---|---|
+| Um CV específico | aba Coleta → “Coletar CV pelo link”: cola `lattes.cnpq.br/<ID>` (ou `cv?id=`, ou os 16 dígitos); vai para o **topo da fila** e o card acompanha até o CV estar no banco. Se já foi coletado, oferece “coletar de novo”. Link com ID interno (`visualizacv.do?id=K…`) não serve: o ID Lattes só aparece depois do captcha | um por vez |
 | Lista de IDs | aba Coleta → colar texto (aceita URLs `lattes.cnpq.br/<id>`, CSV, lista do CNPq) | o que você tiver |
 | Instituições-alvo + ORCID | aba Instituições → lista de nomes → “Descobrir” (API pública do ORCID por afiliação; lê o link do Lattes no perfil) | só quem declarou o Lattes no ORCID (taxa varia) |
 | Nome (+ instituição) | aba Coleta → “Achar pesquisador por nome” (mesma fonte) | idem |

@@ -153,7 +153,7 @@ fs.mkdirSync(paths.browserProfile(), { recursive: true });
 async function proximo(): Promise<{ lattes_id: string } | null> {
   const r = await pool.query(
     `UPDATE fila SET status='baixando', tentativas=tentativas+1, atualizado_em=now()
-     WHERE lattes_id = (SELECT lattes_id FROM fila WHERE status='pendente' ORDER BY criado_em, lattes_id LIMIT 1 FOR UPDATE SKIP LOCKED)
+     WHERE lattes_id = (SELECT lattes_id FROM fila WHERE status='pendente' ORDER BY prioridade DESC, criado_em, lattes_id LIMIT 1 FOR UPDATE SKIP LOCKED)
      RETURNING lattes_id`,
   );
   return r.rows[0] ?? null;

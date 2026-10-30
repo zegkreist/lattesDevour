@@ -116,6 +116,48 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     const ids = extrairIds(req.body.texto ?? '');
     return { encontrados: ids.length, novos: await enfileirar(ids, req.body.origem ?? 'lista', req.body.alvoId) };
   });
+  // ───────────── Coletar um CV pelo link (vai para o topo da fila) ─────────────
+  const JA_COLETADO = ['parseado', 'html', 'baixado'];
+  const EM_ANDAMENTO = ['baixando', 'aguardando_captcha'];
+  app.post<{ Body: { link: string; recoletar?: boolean } }>('/api/coletar', async (req, reply) => {
+    const link = String(req.body?.link ?? '').trim();
+    const id = /(?<!\d)(\d{16})(?!\d)/.exec(link)?.[1];
+    if (!id) {
+      const erro = /id=K\w+/i.test(link)
+        ? 'este link usa o ID interno (K…), que só vira o ID Lattes depois do captcha. Abra o CV e copie o "Endereço para acessar este CV" (http://lattes.cnpq.br/ + 16 dígitos).'
+        : 'não achei um ID Lattes (16 dígitos) no link. Use http://lattes.cnpq.br/<ID>.';
+      return reply.code(400).send({ erro });
+    }
+    const atual = (await pool.query(`SELECT status FROM fila WHERE lattes_id = $1`, [id])).rows[0];
+    if (atual && EM_ANDAMENTO.includes(atual.status)) return { id, acao: 'em_andamento' };
+    if (atual && JA_COLETADO.includes(atual.status) && !req.body.recoletar) return { id, acao: 'ja_coletado' };
+    await pool.query(
+      `INSERT INTO fila (lattes_id, origem, prioridade) VALUES ($1, 'manual', 1)
+       ON CONFLICT (lattes_id) DO UPDATE SET status = 'pendente', prioridade = 1, tentativas = 0, ultimo_erro = NULL, atualizado_em = now()`,
+      [id],
+    );
+    return { id, acao: 'enfileirado' };
+  });
+  app.get<{ Params: { id: string } }>('/api/coletar/:id', async (req, reply) => {
+    const f = (await pool.query(`SELECT * FROM fila WHERE lattes_id = $1`, [req.params.id])).rows[0];
+    if (!f) return reply.code(404).send({ erro: 'ID não está na fila' });
+    const posicao = f.status === 'pendente'
+      ? Number((await pool.query(
+          `SELECT count(*) FROM fila WHERE status = 'pendente'
+             AND (prioridade > $1 OR (prioridade = $1 AND (criado_em, lattes_id) < ($2, $3)))`,
+          [f.prioridade, f.criado_em, f.lattes_id],
+        )).rows[0].count) + 1
+      : null;
+    const p = (await pool.query(
+      `SELECT p.nome, (SELECT count(*) FROM obra_fonte o WHERE o.pesquisador_id = p.id)::int AS obras FROM pesquisador p WHERE p.id = $1`,
+      [req.params.id],
+    )).rows[0] ?? null;
+    return {
+      id: f.lattes_id, status: f.status, ultimoErro: f.ultimo_erro, nomeHint: f.nome_hint, posicao, pesquisador: p,
+      coletorRodando: coletor.state.rodando, coletorAtual: coletor.state.atual,
+    };
+  });
+
   app.get<{ Querystring: Q }>('/api/fila', async (req) => {
     const { status } = req.query;
     const lim = intOr(req.query.limit, 50);
