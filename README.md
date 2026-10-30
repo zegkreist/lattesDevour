@@ -65,8 +65,8 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
 - **Modo humano (sem chave):** marca `aguardando_captcha` e espera você resolver pelo noVNC e
   clicar em Submeter. Se ninguém responder em `CAPTCHA_TIMEOUT_MS` (10 min), **pausa** a coleta e
   devolve o ID à fila.
-- **O que é salvo:** `data/app/html/<id>.html`, com a fila em status `html` (aguardando o parser de
-  HTML, ainda não escrito). Página inesperada (nem captcha nem CV) vai para `html/_debug/` e o ID
+- **O que é salvo:** `data/app/html/<id>.html` (status `html` na fila até o parser de HTML rodar,
+  depois `parseado`). Página inesperada (nem captcha nem CV) vai para `html/_debug/` e o ID
   fica `sem_cv` com o caminho no erro. A URL é configurável (`LATTES_CV_URL`).
 - **Ritmo:** nos dois modos, de **60 a 180 CVs por hora** (padrão 60), ajustável na aba Coleta, que
   mostra o intervalo resultante. Os CVs são espaçados de início a início (3600/N s, ±20%, mínimo de
@@ -104,8 +104,18 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
 - Produções são extraídas por **convenção do XSD** (todo elemento com filho `DADOS-BASICOS-*`):
   um tipo novo de produção é absorvido sem código (o tipo vira o nome do elemento). O que nem
   isso cobre aparece no painel em **“Elementos sem parser”**.
-- Os XMLs crus ficam em `data/app/xml/`, então **trocar um parser não exige baixar de novo**:
-  botão “Reprocessar”.
+- `parsers/lattes-html-v1/` — a **página pública do CV** (o que o coletor salva). Gera o mesmo
+  `ParsedCV`, com os mesmos tipos de obra e a mesma chave (DOI ou `tipo|título|ano`), para a obra de
+  dois coautores — um vindo do XML e outro do HTML — virar uma só. Lê identificação, endereço
+  profissional, formação, atuação, áreas, produções (artigos com DOI/ISSN/periódico do `cvuri`) e
+  orientações concluídas; participação em eventos e orientações em andamento ficam de fora, como
+  no XML. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML
+  e HTML do mesmo ID, vale o XML.
+- **Coleta em cadeia:** todo link `lattes.cnpq.br/<id>` de outra pessoa na página (orientador,
+  orientados, coautores) entra na fila com origem `cv` e o nome como dica; quem já estava na fila
+  (ex.: veio do ORCID) não duplica, só ganha o nome se não tinha.
+- Os XMLs e HTMLs crus ficam em `data/app/xml/` e `data/app/html/`, então **trocar um parser não
+  exige baixar de novo**: botão “Reprocessar”.
 
 ### Adicionar um parser
 
@@ -123,7 +133,14 @@ Colunas `*_norm` guardam texto sem acento/minúsculo (mesma função na gravaç�
 `ano:2021`, `decada:2020s`, `kw:<palavra-chave>`, `idioma:*`, `tem-doi`. Os filtros do painel e
 do grafo viram `tags @> ARRAY[...]`.
 
-Obras são **deduplicadas** entre CVs (por DOI ou tipo+título+ano); `obra_fonte` diz quem declarou,
+Obras são **deduplicadas** entre CVs (por DOI ou tipo+título+ano). `obra_fonte` guarda **o que cada
+CV diz** da obra (`parser` e `dados`); `obra.dados` é a **fusão** dessas versões chave a chave, com o
+XML vencendo o HTML, e é refeita a cada (re)processamento. Campos de valor único (natureza, veículo,
+ISSN, idioma...) seguem a mesma regra: fonte XML sempre atualiza; HTML só quando a obra não tem
+fonte XML, senão preenche o que falta. Os detalhes usam os **nomes de atributo do XML** nas duas
+fontes (`VOLUME`, `PAGINA-INICIAL`, `NOME-DO-EVENTO`, `CIDADE-DO-EVENTO`, `NOME-DA-EDITORA`,
+`ORGANIZADORES`, `NATUREZA`...); o HTML extrai isso do texto da citação e guarda o texto em
+`CITACAO`. Ex.: `SELECT dados->>'CIDADE-DO-EVENTO', count(*) FROM obra GROUP BY 1`.
 `autoria` guarda os autores (com o ID Lattes quando existe). Coautoria = autores com ID na mesma
 obra; orientação (`orientacao`) vira outra aresta do grafo.
 
@@ -137,6 +154,25 @@ Diário às `BACKUP_HOUR` (Brasília), mais o botão em Configurações: `pg_dum
 em `data/app/backups/` (mantém os últimos `BACKUP_KEEP`). Se `BACKUP_S3_BUCKET` e as credenciais
 AWS estiverem no `.env`, sobe também para `s3://BUCKET/PREFIXO`. Recoletar um XML custa um captcha,
 então o tarball dos XMLs vale tanto quanto o dump. Restaurar: `pg_restore -d lattes arquivo.dump`.
+
+## Cópia em Parquet (sem senha)
+
+Um `<tabela>.parquet` por tabela (compressão GZIP), em `data/app/exports/` (no ZimaOS,
+`/media/firstBlood/lattesdevour/app/exports/`), sobrescrito a cada exportação: junto do backup
+diário (`BACKUP_HOUR`) e pelo botão em Configurações. Abre direto, sem o Postgres:
+
+```python
+import pandas as pd; obras = pd.read_parquet('exports/obra.parquet')
+```
+```sql
+-- duckdb
+SELECT tipo, count(*) FROM 'exports/obra.parquet' GROUP BY 1;
+```
+
+Listas (`text[]`) viram listas; `jsonb` vira texto JSON. Ficam de fora `settings` (guarda a chave
+do 2Captcha), `schema_migrations` e as colunas `tsv` (índice de busca). Quem gera é o DuckDB, que
+lê o Postgres pela extensão `postgres`, baixada uma vez para `data/app/duckdb-ext/` (precisa de
+internet na primeira exportação).
 
 ## Desenvolvimento
 
@@ -152,7 +188,9 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 
 ## Limitações conhecidas
 
-- Coleta nominal exige captcha (humano ou 2Captcha, acima) e salva HTML, que ainda não tem parser; descoberta via ORCID acha o link do Lattes em só ~5% dos perfis.
+- Coleta nominal exige captcha (humano ou 2Captcha, acima); descoberta via ORCID acha o link do Lattes em só ~5% dos perfis.
+- CV em HTML sem “Endereço profissional” publicado fica sem UF (a instituição vem do vínculo atual), e não aparece nos filtros por região.
+- O parser de HTML foi feito a partir de **um** CV real (Letras, sem endereço nem áreas de atuação); endereço e áreas seguem a marcação esperada, mas não foram vistos num CV real.
 - O grafo só liga pesquisadores **já coletados** (coautores externos com ID ainda não viram nós).
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.
 - O backup em nuvem faz tarball completo dos XMLs a cada rodada (não incremental).

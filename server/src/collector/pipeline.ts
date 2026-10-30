@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pool } from '../db.js';
 import { paths } from '../config.js';
-import { currentParserVersion, parseCV } from '../parsers/index.js';
+import { enfileirarVinculados } from '../discovery/ids.js';
+import { currentParserVersion, parseCV, parseHtmlCV, HTML_PARSER } from '../parsers/index.js';
 import { ingest } from '../store/ingest.js';
 import { unzipSync } from 'fflate';
 import { decodeXml, extractXml, isZip } from '../util/xmlfile.js';
@@ -12,10 +13,14 @@ export function xmlPathFor(id: string): string {
   return path.join(paths.xml(), `${id}.xml`);
 }
 
+export function htmlPathFor(id: string): string {
+  return path.join(paths.html(), `${id}.html`);
+}
+
 /** Guarda o HTML do CV (página pública) e marca a fila como 'html' até existir parser de HTML. */
 export async function saveHtml(id: string, html: string): Promise<string> {
   fs.mkdirSync(paths.html(), { recursive: true });
-  const file = path.join(paths.html(), `${id}.html`);
+  const file = htmlPathFor(id);
   fs.writeFileSync(file + '.tmp', html);
   fs.renameSync(file + '.tmp', file);
   await pool.query(
@@ -41,12 +46,17 @@ export async function saveXml(id: string, bytes: Uint8Array, origem = 'manual'):
 
 export async function parseOne(id: string): Promise<{ ok: boolean; erro?: string }> {
   try {
-    const file = xmlPathFor(id);
-    const buf = fs.readFileSync(file);
+    // XML (Extrator do CNPq) é mais completo; sem ele, o HTML da página do CV.
+    const xml = xmlPathFor(id);
+    const temXml = fs.existsSync(xml);
+    const buf = fs.readFileSync(temXml ? xml : htmlPathFor(id));
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
-    const { cv, parser, versao } = parseCV(decodeXml(buf));
-    if (cv.lattesId !== id) throw new Error(`XML é do ID ${cv.lattesId}, esperado ${id}`);
+    const { cv, parser, versao } = temXml
+      ? parseCV(decodeXml(buf))
+      : { cv: parseHtmlCV(buf.toString('utf8')), ...HTML_PARSER };
+    if (cv.lattesId !== id) throw new Error(`CV é do ID ${cv.lattesId}, esperado ${id}`);
     await ingest(cv, { parser, versao, xmlSha256: sha });
+    if (cv.vinculados?.length) await enfileirarVinculados(cv.vinculados);
     return { ok: true };
   } catch (e) {
     const erro = e instanceof Error ? e.message : String(e);
@@ -56,12 +66,12 @@ export async function parseOne(id: string): Promise<{ ok: boolean; erro?: string
 }
 
 let parsing = false;
-/** Processa o que está 'baixado'. Roda em loop curto; reentrância bloqueada. */
+/** Processa o que está 'baixado' (XML) ou 'html'. Roda em loop curto; reentrância bloqueada. */
 export async function parsePending(limit = 50): Promise<number> {
   if (parsing) return 0;
   parsing = true;
   try {
-    const { rows } = await pool.query(`SELECT lattes_id FROM fila WHERE status='baixado' ORDER BY atualizado_em LIMIT $1`, [limit]);
+    const { rows } = await pool.query(`SELECT lattes_id FROM fila WHERE status IN ('baixado','html') ORDER BY atualizado_em LIMIT $1`, [limit]);
     for (const r of rows) await parseOne(r.lattes_id);
     return rows.length;
   } finally {
@@ -69,11 +79,11 @@ export async function parsePending(limit = 50): Promise<number> {
   }
 }
 
-/** Reprocessa XMLs já em disco: só os de parser antigo, ou todos. É por isso que guardamos o XML cru. */
+/** Reprocessa XML/HTML já em disco: só os de parser antigo, ou todos. É por isso que guardamos o arquivo cru. */
 export async function reprocessar(todos: boolean): Promise<number> {
   const r = await pool.query(
     `UPDATE fila SET status='baixado', atualizado_em=now()
-     WHERE xml_path IS NOT NULL AND status IN ('parseado','erro')
+     WHERE (xml_path IS NOT NULL OR html_path IS NOT NULL) AND status IN ('parseado','erro')
        AND ($1 OR lattes_id IN (SELECT id FROM pesquisador WHERE parser_versao < $2)
             OR lattes_id NOT IN (SELECT id FROM pesquisador))`,
     [todos, currentParserVersion()],

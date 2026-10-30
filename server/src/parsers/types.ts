@@ -50,6 +50,8 @@ export interface ParsedCV {
   atuacoes: Record<string, unknown>[];
   obras: ParsedObra[];
   orientacoes: ParsedOrientacao[];
+  /** Outros pesquisadores citados com ID Lattes (entram na fila de coleta). */
+  vinculados?: { lattesId: string; nome: string | null }[];
   /** Caminhos de elementos que nenhum parser soube extrair (sinal de formato novo). */
   desconhecidos: string[];
   avisos: string[];

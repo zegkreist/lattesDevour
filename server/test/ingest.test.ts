@@ -79,4 +79,25 @@ d('ingest + busca (Postgres)', () => {
     expect(r.rows).toHaveLength(1);
     expect(Number(r.rows[0].w)).toBeGreaterThanOrEqual(2); // artigo + evento
   });
+
+  it('mesma obra por HTML e XML: cada CV guarda a sua versão e obra.dados funde (XML vence)', async () => {
+    const { parseHtmlCV, HTML_PARSER } = await import('../src/parsers/index.js');
+    const html = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8')
+      .replaceAll('1234567890123456', '3333333333333333')
+      .replaceAll('10.1234/ABC.2024.1', '10.1000/ABC.123');
+    await ingest(parseHtmlCV(html), { ...HTML_PARSER, xmlSha256: 'h' });
+    const o = (await pool.query(`SELECT id, veiculo, dados FROM obra WHERE doi='10.1000/abc.123'`)).rows[0];
+    // XML disse volume 66 e periódico Freshwater Biology; o HTML diz 7 e outro nome: vale o XML.
+    expect(o.veiculo).toBe('Freshwater Biology');
+    expect(o.dados.VOLUME).toBe('66');
+    // O que só o HTML trouxe entra na fusão.
+    expect(o.dados['PAGINA-INICIAL']).toBe('1');
+    expect(o.dados.CITACAO).toMatch(/^SOUZA, A\. F\./);
+    const fontes = (await pool.query(`SELECT pesquisador_id, parser, dados->>'VOLUME' v FROM obra_fonte WHERE obra_id=$1 ORDER BY 1`, [o.id])).rows;
+    expect(fontes).toEqual([
+      { pesquisador_id: '1111111111111111', parser: 'lattes-xml-v1', v: '66' },
+      { pesquisador_id: '2222222222222222', parser: 'lattes-xml-v1', v: '66' },
+      { pesquisador_id: '3333333333333333', parser: 'lattes-html-v1', v: '7' },
+    ]);
+  });
 });

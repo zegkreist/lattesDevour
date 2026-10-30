@@ -6,6 +6,8 @@ export function Config() {
   const { data: s, reload } = usePoll<any>('/stats');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const { data: ex, reload: reloadEx } = usePoll<any>('/exportar');
+  const [msgEx, setMsgEx] = useState('');
   return (
     <div className="grid g2">
       <Card titulo="Backup">
@@ -14,12 +16,22 @@ export function Config() {
         <button className="b" disabled={busy} onClick={async () => { setBusy(true); setMsg('executando…'); try { const r = await api('/backup', { body: {} }); setMsg(`ok: ${r.arquivos.length} arquivo(s) → ${r.destino}`); reload(); } catch (e: any) { setMsg(e.message); } setBusy(false); }}>Fazer backup agora</button>
         <p>{msg}</p>
       </Card>
+      <Card titulo="Cópia em Parquet">
+        <p className="muted">Um arquivo <code>.parquet</code> por tabela (compressão GZIP), sem senha, em <code>{ex?.dir ?? 'data/exports'}</code>: abre direto no pandas, DuckDB, Power BI. Sobrescrito a cada exportação; roda junto com o backup diário. A tabela de configurações (que guarda a chave do 2Captcha) fica de fora.</p>
+        <button className="b" disabled={busy} onClick={async () => { setBusy(true); setMsgEx('exportando…'); try { const r = await api('/exportar', { body: {} }); setMsgEx(`ok: ${r.tabelas.length} tabela(s), ${fmt(r.tabelas.reduce((n: number, t: any) => n + t.linhas, 0))} linha(s)`); reloadEx(); } catch (e: any) { setMsgEx(e.message); } setBusy(false); }}>Exportar agora</button>
+        <p>{msgEx}</p>
+        {ex?.arquivos.length ? (
+          <table><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Gerado</th></tr></thead><tbody>
+            {ex.arquivos.map((a: any) => <tr key={a.arquivo}><td>{a.arquivo}</td><td>{fmt(Math.ceil(a.bytes / 1024))} KB</td><td>{when(a.em)}</td></tr>)}
+          </tbody></table>
+        ) : <p className="muted">Nenhuma exportação ainda.</p>}
+      </Card>
       <Card titulo="Reprocessar">
-        <p className="muted">Reaplica o parser a todos os XMLs já em disco (sem baixar nada). Use depois de mudar um parser.</p>
+        <p className="muted">Reaplica o parser a todos os XMLs e HTMLs já em disco (sem baixar nada). Use depois de mudar um parser.</p>
         <button className="b sec" onClick={() => confirm('Reprocessar TODOS os CVs?') && api('/reprocessar', { body: { todos: true } }).then((r) => setMsg(`${fmt(r.reenfileirados)} CV(s) na fila de parse`))}>Reprocessar todos</button>
       </Card>
       <Card titulo="Sobre captcha">
-        <p className="muted">O Lattes protege a busca e o download do XML com reCAPTCHA. Com a chave do 2Captcha (aba Coleta, ou <code>TWOCAPTCHA_API_KEY</code> no <code>.env</code>) o coletor resolve sozinho; sem ela, pausa e pede para uma pessoa resolver. O ritmo (60 a 180 CVs/hora) também fica na aba Coleta. Para extração em volume, a via oficial é o Extrator Lattes do CNPq (<code>atendimento@cnpq.br</code>, assunto “Solicitação de acesso ao Lattes Extrator”), que exige uma instituição de ensino/pesquisa.</p>
+        <p className="muted">O Lattes protege a busca e a página de cada CV com reCAPTCHA. Com a chave do 2Captcha (aba Coleta, ou <code>TWOCAPTCHA_API_KEY</code> no <code>.env</code>) o coletor resolve sozinho; sem ela, pausa e pede para uma pessoa resolver. O ritmo (60 a 180 CVs/hora) também fica na aba Coleta. Para extração em volume, a via oficial é o Extrator Lattes do CNPq (<code>atendimento@cnpq.br</code>, assunto “Solicitação de acesso ao Lattes Extrator”), que exige uma instituição de ensino/pesquisa.</p>
         {s && <p className="muted">Último backup: {s.backups[0] ? `${when(s.backups[0].em)} (${s.backups[0].ok ? 'ok' : 'falhou'})` : 'nenhum'}</p>}
       </Card>
     </div>

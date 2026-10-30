@@ -13,10 +13,12 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",
     "@aws-sdk/lib-storage": "^3.1160.0",
+    "@duckdb/node-api": "^1.5.6-r.1",
     "@fastify/static": "^10.1.8",
     "fast-xml-parser": "^5.11.2",
     "fastify": "^5.12.7",
     "fflate": "^0.8.3",
+    "node-html-parser": "^7.0.1",
     "pg": "^8.23.1",
     "playwright": "^1.64.1"
   },

@@ -5,6 +5,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { config, paths } from './config.js';
 import { pool } from './db.js';
+import { exportarParquet } from './exportar.js';
 
 // Backup = pg_dump (formato custom) + tarball dos XMLs crus (recoletar custa um captcha por
 // CV, então os XMLs valem tanto quanto o banco). Grava em data/backups no host e, se
@@ -73,7 +74,7 @@ function podar(): void {
   }
 }
 
-/** Agenda diário no horário de Brasília (BACKUP_HOUR; 0 desliga). */
+/** Agenda diário no horário de Brasília (BACKUP_HOUR; 0 desliga): backup e cópia em Parquet. */
 export function agendarBackup(): void {
   if (!config.backup.hour) return;
   let ultimoDia = '';
@@ -83,5 +84,6 @@ export function agendarBackup(): void {
     if (Number(hora.split(':')[0]) !== config.backup.hour || dia === ultimoDia) return;
     ultimoDia = dia;
     await fazerBackup().catch((e) => console.error('backup agendado falhou:', e));
+    await exportarParquet().catch((e) => console.error('exportação Parquet agendada falhou:', e));
   }, 60_000).unref();
 }

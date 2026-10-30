@@ -1,12 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { fazerBackup } from '../backup.js';
-import { config } from '../config.js';
+import { config, paths } from '../config.js';
 import * as coletor from '../collector/collector.js';
 import { importarPasta, reprocessar } from '../collector/pipeline.js';
 import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
 import { adicionarAlvos, buscarPorNome, descobrindo, descobrirInstituicao } from '../discovery/orcid.js';
 import { enfileirar, extrairIds } from '../discovery/ids.js';
+import { exportarParquet } from '../exportar.js';
 import { currentParserVersion, listParsers } from '../parsers/index.js';
 import { norm, slug } from '../util/text.js';
 
@@ -169,6 +172,17 @@ export async function rotas(app: FastifyInstance): Promise<void> {
   app.post('/api/importar-pasta', async () => importarPasta());
   app.post<{ Body: { todos?: boolean } }>('/api/reprocessar', async (req) => ({ reenfileirados: await reprocessar(!!req.body?.todos) }));
   app.post('/api/backup', async () => fazerBackup());
+  app.post('/api/exportar', async () => exportarParquet());
+  app.get('/api/exportar', async () => {
+    const dir = paths.exports();
+    const arquivos = fs.existsSync(dir)
+      ? fs.readdirSync(dir).filter((f) => f.endsWith('.parquet')).map((f) => {
+          const st = fs.statSync(path.join(dir, f));
+          return { arquivo: f, bytes: st.size, em: st.mtime.toISOString() };
+        })
+      : [];
+    return { dir, arquivos };
+  });
 
   // ───────────── Busca ─────────────
   app.get('/api/facets', async () => {

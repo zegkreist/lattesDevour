@@ -31,6 +31,29 @@ export async function ingest(
   }
 }
 
+// Campos de obra com um valor só. Quem manda: uma fonte XML (mais completa e estruturada)
+// sempre atualiza; uma fonte HTML atualiza se a obra não tem fonte XML, senão só preenche vazio.
+// $19 = esta fonte é XML. As fontes deste CV já foram apagadas, então o EXISTS olha os outros CVs.
+const CAMPOS_SIMPLES = ['subtipo', 'idioma', 'veiculo', 'issn', 'isbn', 'pais', 'doi'];
+const preferido = (k: string) =>
+  `CASE WHEN $19 OR NOT EXISTS (SELECT 1 FROM obra_fonte f WHERE f.obra_id = obra.id AND f.parser LIKE 'lattes-xml%')
+     THEN COALESCE(EXCLUDED.${k}, obra.${k}) ELSE COALESCE(obra.${k}, EXCLUDED.${k}) END`;
+
+/** obra.dados = fusão do que cada CV diz, chave a chave; em conflito vence a fonte XML. */
+async function fundirDados(c: pg.PoolClient, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  await c.query(
+    `UPDATE obra o SET dados = COALESCE((
+       SELECT jsonb_object_agg(k, v) FROM (
+         SELECT DISTINCT ON (e.key) e.key AS k, e.value AS v
+         FROM obra_fonte f CROSS JOIN LATERAL jsonb_each(f.dados) e
+         WHERE f.obra_id = o.id
+         ORDER BY e.key, (f.parser LIKE 'lattes-xml%') DESC, f.pesquisador_id) x), '{}')
+     WHERE o.id = ANY($1::bigint[]) AND EXISTS (SELECT 1 FROM obra_fonte f WHERE f.obra_id = o.id)`,
+    [ids],
+  );
+}
+
 async function ingestTx(
   c: pg.PoolClient,
   cv: ParsedCV,
@@ -86,6 +109,8 @@ async function ingestTx(
   await c.query('DELETE FROM orientacao WHERE orientador_id=$1', [cv.lattesId]);
 
   const vistas = new Set<string>();
+  const tocadas: string[] = [...antigas];
+  const doXml = meta.parser.startsWith('lattes-xml');
   let nObras = 0;
   for (const o of cv.obras) {
     if (vistas.has(o.chave)) continue; // o mesmo CV repete a obra (ex.: DOI igual)
@@ -100,15 +125,20 @@ async function ingestTx(
          palavras_chave = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.palavras_chave || EXCLUDED.palavras_chave) t), '{}'),
          grandes_areas = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.grandes_areas || EXCLUDED.grandes_areas) t), '{}'),
          areas = COALESCE((SELECT array_agg(DISTINCT t) FROM unnest(obra.areas || EXCLUDED.areas) t), '{}'),
-         veiculo = COALESCE(obra.veiculo, EXCLUDED.veiculo), doi = COALESCE(obra.doi, EXCLUDED.doi)
+         ${CAMPOS_SIMPLES.map((k) => `${k} = ${preferido(k)}`).join(', ')}
        RETURNING id, (xmax = 0) AS inserted`,
       [
         o.chave, o.tipo, o.subtipo, o.titulo, norm(o.titulo), o.ano, o.doi, o.idioma, o.veiculo, o.issn, o.isbn, o.pais,
-        o.palavrasChave, o.grandesAreas, o.areas, tags, JSON.stringify(o.dados), textoBusca(o),
+        o.palavrasChave, o.grandesAreas, o.areas, tags, JSON.stringify(o.dados), textoBusca(o), doXml,
       ],
     );
     const obraId: string = r.rows[0].id;
-    await c.query('INSERT INTO obra_fonte (obra_id, pesquisador_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [obraId, cv.lattesId]);
+    tocadas.push(obraId);
+    await c.query(
+      `INSERT INTO obra_fonte (obra_id, pesquisador_id, parser, dados) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (obra_id, pesquisador_id) DO UPDATE SET parser = EXCLUDED.parser, dados = EXCLUDED.dados`,
+      [obraId, cv.lattesId, meta.parser, JSON.stringify(o.dados)],
+    );
 
     // Autoria vem do primeiro CV que declarou a obra (ou do primeiro com lista não-vazia).
     const tem = r.rows[0].inserted
@@ -142,6 +172,8 @@ async function ingestTx(
       [cv.lattesId, o.orientadoNome, o.orientadoLattesId, o.nivel, o.titulo, o.ano, o.instituicao, o.curso],
     );
   }
+
+  await fundirDados(c, tocadas);
 
   // Obras que só este CV declarava e que sumiram dele.
   if (antigas.length) {
