@@ -30,13 +30,13 @@ export async function enfileirarVinculados(vs: { lattesId: string; nome: string 
   return r.rowCount ?? 0;
 }
 
-export async function enfileirar(ids: string[], origem: string, alvoId?: number | null): Promise<number> {
+export async function enfileirar(ids: string[], origem: string): Promise<number> {
   let novos = 0;
   for (let i = 0; i < ids.length; i += 5000) {
     const r = await pool.query(
-      `INSERT INTO fila (lattes_id, origem, instituicao_alvo_id)
-       SELECT x, $2, $3 FROM unnest($1::text[]) x ON CONFLICT (lattes_id) DO NOTHING`,
-      [ids.slice(i, i + 5000), origem, alvoId ?? null],
+      `INSERT INTO fila (lattes_id, origem)
+       SELECT x, $2 FROM unnest($1::text[]) x ON CONFLICT (lattes_id) DO NOTHING`,
+      [ids.slice(i, i + 5000), origem],
     );
     novos += r.rowCount ?? 0;
   }

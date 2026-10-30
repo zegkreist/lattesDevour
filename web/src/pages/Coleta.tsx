@@ -137,6 +137,18 @@ function Fila() {
           <option value="">todos</option>{['pendente', 'baixando', 'aguardando_captcha', 'html', 'baixado', 'parseado', 'erro', 'sem_cv'].map((s) => <option key={s}>{s}</option>)}
         </select>
         <button className="b sec" onClick={() => api('/fila/retry-erros', { body: {} }).then((r) => setMsg(`${r.reenfileirados} para baixar · ${r.reprocessados} só reprocessar (já em disco)`))}>Reenfileirar erros</button>
+        <button className="b sec" onClick={async () => {
+          const n = stats?.fila?.pendente ?? 0;
+          if (!n || !confirm(`Remover ${fmt(n)} CV(s) pendente(s) da fila? Quem já foi baixado ou está baixando não é afetado.`)) return;
+          const r = await api('/fila?status=pendente', { method: 'DELETE' });
+          setMsg(`${fmt(r.removidos)} pendente(s) removido(s)`);
+        }}>Limpar pendentes</button>
+        <button className="b sec" onClick={async () => {
+          const n = (stats?.fila?.erro ?? 0) + (stats?.fila?.sem_cv ?? 0);
+          if (!n || !confirm(`Remover ${fmt(n)} CV(s) com erro/sem CV da fila?`)) return;
+          const r = await Promise.all([api('/fila?status=erro', { method: 'DELETE' }), api('/fila?status=sem_cv', { method: 'DELETE' })]);
+          setMsg(`${fmt(r[0].removidos + r[1].removidos)} com erro removido(s)`);
+        }}>Limpar erros</button>
         <span className="muted">{msg}</span>
       </div>
       <table><thead><tr><th>ID</th><th>Status</th><th>Nome</th><th>Origem</th>{comErro && <th>Erro</th>}<th>Atualizado</th></tr></thead><tbody>

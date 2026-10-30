@@ -8,7 +8,6 @@ import * as coletor from '../collector/collector.js';
 import { htmlPathFor, importarPasta, reprocessar, xmlPathFor } from '../collector/pipeline.js';
 import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
-import { adicionarAlvos, buscarPorNome, descobrindo, descobrirInstituicao } from '../discovery/orcid.js';
 import { enfileirar, extrairIds, PRIORIDADE } from '../discovery/ids.js';
 import { exportarParquet } from '../exportar.js';
 import { currentParserVersion, listParsers } from '../parsers/index.js';
@@ -70,51 +69,11 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // ───────────── Instituições-alvo ─────────────
-  app.get('/api/instituicoes-alvo', async () => {
-    const r = await pool.query(`
-      SELECT a.*, 
-        count(f.*) FILTER (WHERE true) AS ids,
-        count(f.*) FILTER (WHERE f.status='pendente') AS pendentes,
-        count(f.*) FILTER (WHERE f.status IN ('baixando','aguardando_captcha')) AS em_andamento,
-        count(f.*) FILTER (WHERE f.status IN ('baixado','html','parseado')) AS baixados,
-        count(f.*) FILTER (WHERE f.status='parseado') AS parseados,
-        count(f.*) FILTER (WHERE f.status IN ('erro','sem_cv')) AS falhas
-      FROM instituicao_alvo a LEFT JOIN fila f ON f.instituicao_alvo_id = a.id
-      GROUP BY a.id ORDER BY a.nome`);
-    const ativos = new Set(descobrindo());
-    return r.rows.map((x) => ({
-      ...x,
-      ids: Number(x.ids), pendentes: Number(x.pendentes), em_andamento: Number(x.em_andamento),
-      baixados: Number(x.baixados), parseados: Number(x.parseados), falhas: Number(x.falhas),
-      descobrindo_agora: ativos.has(x.id),
-    }));
-  });
-  app.post<{ Body: { texto: string } }>('/api/instituicoes-alvo', async (req) => ({ adicionadas: await adicionarAlvos(req.body.texto ?? '') }));
-  app.delete<{ Params: { id: string } }>('/api/instituicoes-alvo/:id', async (req) => {
-    await pool.query('DELETE FROM instituicao_alvo WHERE id=$1', [req.params.id]);
-    return { ok: true };
-  });
-  app.post<{ Params: { id: string } }>('/api/instituicoes-alvo/:id/descobrir', async (req) => {
-    void descobrirInstituicao(Number(req.params.id));
-    return { ok: true };
-  });
-  app.post('/api/instituicoes-alvo/descobrir-todas', async () => {
-    const { rows } = await pool.query(`SELECT id FROM instituicao_alvo WHERE status IN ('pendente','erro','descobrindo') ORDER BY id`);
-    void (async () => { for (const r of rows) await descobrirInstituicao(r.id); })();
-    return { iniciadas: rows.length };
-  });
-
-  // ───────────── Descoberta por nome / fila ─────────────
-  app.post<{ Body: { nome: string; instituicao?: string } }>('/api/descoberta/nome', async (req, reply) => {
-    if (!req.body.nome?.trim()) return reply.code(400).send({ erro: 'nome obrigatório' });
-    return buscarPorNome(req.body.nome, req.body.instituicao);
-  });
-
+  // ───────────── Fila ─────────────
   // Aceita IDs soltos, lista do CNPq, URLs lattes.cnpq.br/<id>, CSV: qualquer texto com IDs de 16 dígitos.
-  app.post<{ Body: { texto: string; alvoId?: number; origem?: string } }>('/api/fila/enfileirar', async (req) => {
+  app.post<{ Body: { texto: string; origem?: string } }>('/api/fila/enfileirar', async (req) => {
     const ids = extrairIds(req.body.texto ?? '');
-    return { encontrados: ids.length, novos: await enfileirar(ids, req.body.origem ?? 'lista', req.body.alvoId) };
+    return { encontrados: ids.length, novos: await enfileirar(ids, req.body.origem ?? 'lista') };
   });
   // ───────────── Coletar CVs pelo link ou ID (vão para o topo da fila) ─────────────
   const JA_COLETADO = ['parseado', 'html', 'baixado'];
@@ -182,12 +141,20 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     const lim = intOr(req.query.limit, 50);
     const off = (intOr(req.query.page, 1, 1e6) - 1) * lim;
     const r = await pool.query(
-      `SELECT f.lattes_id, f.status, f.origem, f.nome_hint, f.tentativas, f.ultimo_erro, f.atualizado_em, a.nome AS alvo
-       FROM fila f LEFT JOIN instituicao_alvo a ON a.id = f.instituicao_alvo_id
+      `SELECT f.lattes_id, f.status, f.origem, f.nome_hint, f.tentativas, f.ultimo_erro, f.atualizado_em
+       FROM fila f
        WHERE ($1::text IS NULL OR f.status = $1) ORDER BY f.atualizado_em DESC LIMIT $2 OFFSET $3`,
       [status || null, lim, off],
     );
     return r.rows;
+  });
+  // Limpa só o que ainda não rodou ou falhou; o que está baixando ou já foi coletado fica (a linha da
+  // fila é o elo com o arquivo em disco). Quem for citado de novo num CV volta a entrar sozinho.
+  app.delete<{ Querystring: Q }>('/api/fila', async (req, reply) => {
+    const status = req.query.status ?? 'pendente';
+    if (!['pendente', 'erro', 'sem_cv'].includes(status)) return reply.code(400).send({ erro: 'só dá para limpar pendente, erro ou sem_cv' });
+    const r = await pool.query(`DELETE FROM fila WHERE status = $1`, [status]);
+    return { removidos: r.rowCount ?? 0 };
   });
   // CV com arquivo em disco que falhou no parse volta para o parse, não para o download
   // (baixar de novo gastaria um captcha à toa). Só vai para o download quem não tem arquivo.
@@ -375,6 +342,46 @@ export async function rotas(app: FastifyInstance): Promise<void> {
        FROM obra o ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
        ORDER BY ${rank} DESC, o.ano DESC NULLS LAST, o.id LIMIT ${lim} OFFSET ${off}`, args);
     return { total: Number(r.rows[0]?.total ?? 0), itens: r.rows.map(({ total, ...x }) => x) };
+  });
+
+  // ───────────── Próximos: quem ainda não foi coletado mas está colado na rede de quem já foi ─────────────
+  // As sementes são os pesquisadores coletados que passam no filtro (mesmos filtros do grafo); o
+  // candidato é qualquer ID Lattes que aparece com eles em autoria ou orientação e ainda não tem CV
+  // coletado. `vinculos` = quantos pesquisadores da rede o citam; `obras` = obras em comum somadas.
+  app.get<{ Querystring: Q }>('/api/proximos', async (req) => {
+    const q = req.query;
+    const tags = tagsDe(q);
+    const filtro = q.q ? norm(q.q) : '';
+    const lim = intOr(q.limit, 50);
+    const off = (intOr(q.page, 1, 1e6) - 1) * lim;
+    const r = await pool.query(
+      `WITH sel AS (
+         SELECT p.id FROM pesquisador p WHERE ($1::text[] = '{}' OR p.tags @> $1::text[])
+           AND ($2 = '' OR p.nome_norm % $2 OR p.nome_norm ILIKE '%' || $2 || '%')
+       ), lig AS (
+         SELECT b.autor_lattes_id AS id, b.nome, a.autor_lattes_id AS pid, 1 AS w
+         FROM autoria a JOIN autoria b ON b.obra_id = a.obra_id AND b.autor_lattes_id IS NOT NULL AND b.autor_lattes_id <> a.autor_lattes_id
+         WHERE a.autor_lattes_id IN (SELECT id FROM sel) AND NOT EXISTS (SELECT 1 FROM pesquisador x WHERE x.id = b.autor_lattes_id)
+         UNION ALL
+         SELECT o.orientado_lattes_id, o.orientado_nome, o.orientador_id, 1
+         FROM orientacao o WHERE o.orientador_id IN (SELECT id FROM sel) AND o.orientado_lattes_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM pesquisador x WHERE x.id = o.orientado_lattes_id)
+       ), agg AS (
+         SELECT id, min(nome) AS nome, count(DISTINCT pid) AS vinculos, sum(w) AS ligacoes,
+                (array_agg(DISTINCT pid))[1:3] AS amostra
+         FROM lig GROUP BY id
+       )
+       SELECT g.id, g.nome, g.vinculos, g.ligacoes, f.status AS fila,
+              (SELECT array_agg(p.nome) FROM pesquisador p WHERE p.id = ANY(g.amostra)) AS ligado_a,
+              count(*) OVER() AS total
+       FROM agg g LEFT JOIN fila f ON f.lattes_id = g.id
+       ORDER BY g.vinculos DESC, g.ligacoes DESC, g.nome LIMIT ${lim} OFFSET ${off}`,
+      [tags, filtro],
+    );
+    return {
+      total: Number(r.rows[0]?.total ?? 0),
+      itens: r.rows.map(({ total, ...x }) => ({ ...x, vinculos: Number(x.vinculos), ligacoes: Number(x.ligacoes) })),
+    };
   });
 
   // ───────────── Grafo ─────────────

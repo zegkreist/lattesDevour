@@ -93,8 +93,7 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
 |---|---|---|
 | CVs específicos | aba Coleta → “Adicionar CVs” (destino “topo da fila” ou “topo + rede”): um ou vários links (`lattes.cnpq.br/<ID>`, `cv?id=`) ou IDs de 16 dígitos; vão para o **topo da fila** na ordem colada e o card acompanha cada um até estar no banco. **“+ rede”** (1 ou 2 níveis): quem aparece no CV com link do Lattes (orientador, orientados, coautores) vem logo depois; CV já coletado não é baixado de novo, só reprocessado para priorizar a rede. Link com ID interno (`visualizacv.do?id=K…`) não serve | prioridade: pedido > rede > resto |
 | Lista de IDs | aba Coleta → “Adicionar CVs” com destino “fim da fila” (aceita URLs `lattes.cnpq.br/<id>`, CSV, lista do CNPq) | o que você tiver |
-| Instituições-alvo + ORCID | aba Instituições → lista de nomes → “Descobrir” (API pública do ORCID por afiliação; lê o link do Lattes no perfil) | só quem declarou o Lattes no ORCID (taxa varia) |
-| Nome (+ instituição) | aba Instituições → “Pesquisador por nome (ORCID)” (mesma fonte) | idem |
+| Próximos da rede | aba Próximos → filtro (região, instituição, tema, nome) escolhe a rede de quem já foi coletado; lista quem **ainda não foi coletado** e é coautor/orientado dela, por quantos da rede o citam; marque e mande para o topo (com rede) ou fim da fila | quem tem Lattes linkado nos CVs já coletados |
 | XMLs do Extrator | soltar em `data/app/import/` | o que o CNPq liberar |
 
 A busca nativa do Lattes (por nome/instituição) também exige captcha e não foi automatizada.
@@ -123,7 +122,7 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   e HTML do mesmo ID, vale o XML.
 - **Coleta em cadeia:** todo link `lattes.cnpq.br/<id>` de outra pessoa na página (orientador,
   orientados, coautores) entra na fila com origem `cv` e o nome como dica; quem já estava na fila
-  (ex.: veio do ORCID) não duplica, só ganha o nome se não tinha.
+  (ex.: veio de uma lista de IDs) não duplica, só ganha o nome se não tinha.
 - Os XMLs e HTMLs crus ficam em `data/app/xml/` e `data/app/html/`, então **trocar um parser não
   exige baixar de novo**: Configurações → “Reprocessar todos” repassa todo XML/HTML em disco,
   inclusive arquivos soltos em `data/app/html/` (ex.: salvos à mão do navegador).
@@ -213,9 +212,9 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 
 ## Limitações conhecidas
 
-- Coleta nominal exige captcha (humano ou 2Captcha, acima); descoberta via ORCID acha o link do Lattes em só ~5% dos perfis.
+- Coleta nominal exige captcha (humano ou 2Captcha, acima).
 - UF/região de quem não publica “Endereço profissional” é **inferida** pela instituição: a atual e, depois, as da formação (em andamento, depois a mais recente). Vale a UF já conhecida no banco para aquela instituição (aprendida do endereço de outro CV) ou a deduzida do nome (sigla: “USP”, “UFG”, “PUC-SP”; estado: “Universidade Federal de Goiás”). O log de parse registra “UF X inferida pela instituição Y”; quando uma instituição ganha UF, quem estava ligado a ela sem UF volta para o parse. Instituição sem pista nenhuma (“Universidade Candido Mendes”) não é adivinhada.
 - O parser de HTML foi validado em 8 CVs reais (Letras, Comunicação, Psicologia, Imunologia, Tradução/Libras, Museologia); áreas com produção muito diferente (patentes, software, produção artística) ainda não foram vistas.
-- O grafo só liga pesquisadores **já coletados** (coautores externos com ID ainda não viram nós).
+- O grafo parte do filtro e se expande por coautoria/orientação (até 3 níveis); quem ainda não foi coletado entra como nó “não coletado”, sem perfil.
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.
 - O backup em nuvem faz tarball completo dos XMLs a cada rodada (não incremental).

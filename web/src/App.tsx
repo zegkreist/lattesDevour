@@ -3,15 +3,15 @@ import { Busca } from './pages/Busca';
 import { Coleta } from './pages/Coleta';
 import { Config } from './pages/Config';
 import { GrafoPage } from './pages/GrafoPage';
-import { Instituicoes } from './pages/Instituicoes';
 import { Painel } from './pages/Painel';
+import { Proximos } from './pages/Proximos';
 
 const ABAS = [
   ['painel', 'Painel', Painel],
-  ['inst', 'Instituições', Instituicoes],
   ['coleta', 'Coleta', Coleta],
   ['busca', 'Busca', Busca],
   ['grafo', 'Grafo', GrafoPage],
+  ['proximos', 'Próximos', Proximos],
   ['config', 'Configurações', Config],
 ] as const;
 

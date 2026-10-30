@@ -57,6 +57,17 @@ d('API (Postgres)', () => {
     expect((await get('/api/stats')).totais.obras).toBe(5);
   });
 
+  it('próximos: cita quem não foi coletado e a limpeza da fila só toca pendente/erro', async () => {
+    const r = await get('/api/proximos?regiao=sudeste');
+    expect(r.itens.every((i: any) => i.id !== '1111111111111111' && i.vinculos >= 1)).toBe(true);
+    expect((await get('/api/proximos?regiao=sul')).total).toBe(0);
+    await app.inject({ method: 'POST', url: '/api/fila/enfileirar', payload: { texto: '5555555555555555' } });
+    const del = await app.inject({ method: 'DELETE', url: '/api/fila?status=pendente' });
+    expect(del.json().removidos).toBeGreaterThanOrEqual(1);
+    expect((await app.inject({ method: 'DELETE', url: '/api/fila?status=parseado' })).statusCode).toBe(400);
+    expect((await get('/api/pesquisadores/1111111111111111')).nome).toBeTruthy();
+  });
+
   it('enfileira só IDs de 16 dígitos', async () => {
     const r = await app.inject({ method: 'POST', url: '/api/fila/enfileirar', payload: { texto: 'http://lattes.cnpq.br/3333333333333333 4444444444444444 123 12345678901234567' } });
     expect(r.json()).toEqual({ encontrados: 2, novos: 2 });
