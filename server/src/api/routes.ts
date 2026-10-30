@@ -73,7 +73,7 @@ export async function rotas(app: FastifyInstance): Promise<void> {
         count(f.*) FILTER (WHERE true) AS ids,
         count(f.*) FILTER (WHERE f.status='pendente') AS pendentes,
         count(f.*) FILTER (WHERE f.status IN ('baixando','aguardando_captcha')) AS em_andamento,
-        count(f.*) FILTER (WHERE f.status IN ('baixado','parseado')) AS baixados,
+        count(f.*) FILTER (WHERE f.status IN ('baixado','html','parseado')) AS baixados,
         count(f.*) FILTER (WHERE f.status='parseado') AS parseados,
         count(f.*) FILTER (WHERE f.status IN ('erro','sem_cv')) AS falhas
       FROM instituicao_alvo a LEFT JOIN fila f ON f.instituicao_alvo_id = a.id

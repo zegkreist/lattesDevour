@@ -1,14 +1,14 @@
 import fs from 'node:fs';
-import { chromium, type BrowserContext, type Download, type Page } from 'playwright';
+import path from 'node:path';
+import { chromium, type BrowserContext, type Page } from 'playwright';
 import { config, paths } from '../config.js';
 import { getSetting, pool } from '../db.js';
-import { extractXml } from '../util/xmlfile.js';
-import { saveXml } from './pipeline.js';
+import { saveHtml } from './pipeline.js';
 import { chave2Captcha, Erro2Captcha, resolverRecaptcha } from './twocaptcha.js';
 
-// O Lattes protege a busca e o download do XML com reCAPTCHA v2. Com chave do 2Captcha
-// (aba Coleta ou TWOCAPTCHA_API_KEY) o coletor manda o captcha para o 2Captcha, injeta o token e confirma o download; se o
-// token não destravar o download, cai para o modo humano. Sem chave, abre o currículo num
+// O Lattes protege a página do CV com reCAPTCHA v2. Com chave do 2Captcha (aba Coleta ou
+// TWOCAPTCHA_API_KEY) o coletor manda o captcha para o 2Captcha, injeta o token e submete; se o
+// token não abrir o CV, cai para o modo humano. Sem chave, abre o currículo num
 // Chromium visível (Xvfb + noVNC), marca 'aguardando_captcha' e espera uma pessoa resolver.
 // Em qualquer modo o ritmo é de 60 a 180 CVs por hora, espaçados, para não pesar no CNPq.
 // Para volume, o caminho continua sendo o Extrator Lattes: zip/XML em data/import.
@@ -122,8 +122,9 @@ async function loop(): Promise<void> {
     try {
       const r = await baixar(id);
       if (r === 'timeout') {
-        // Ninguém resolveu o captcha: devolve à fila e PAUSA, em vez de queimar a fila inteira.
+        // Ninguém resolveu o captcha (ou clicaram em Parar): devolve à fila e PAUSA.
         await pool.query(`UPDATE fila SET status='pendente', tentativas=GREATEST(tentativas-1,0), atualizado_em=now() WHERE lattes_id=$1`, [id]);
+        if (!state.rodando) break;
         state.rodando = false;
         set('pausado', `captcha de ${id} sem resposta em ${config.captchaTimeoutMs >= 60_000 ? Math.round(config.captchaTimeoutMs / 60_000) + ' min' : Math.round(config.captchaTimeoutMs / 1000) + ' s'}: coleta pausada`, null);
         break;
@@ -150,89 +151,98 @@ async function loop(): Promise<void> {
 }
 
 async function temCaptcha(page: Page): Promise<boolean> {
-  return (await page.locator('iframe[src*="recaptcha"], .g-recaptcha, #divCaptcha').count()) > 0;
+  return (await page.locator('#divCaptcha, iframe[src*="recaptcha"], .g-recaptcha').count()) > 0;
 }
 
+// A página do CV traz o próprio endereço "http://lattes.cnpq.br/<16 dígitos>".
+const CV_RE = /lattes\.cnpq\.br\/(\d{16})/;
+
+/** Espera a página do CV (sem captcha e com o ID Lattes no HTML); sobrevive às navegações. */
+async function esperarCV(page: Page, ms: number): Promise<string | null> {
+  const fim = Date.now() + ms;
+  while (state.rodando && Date.now() < fim) {
+    const html = await page.content().catch(() => '');
+    if (html && CV_RE.test(html) && !(await temCaptcha(page).catch(() => true))) return html;
+    await sleep(2000);
+  }
+  return null;
+}
+
+// O Lattes não serve mais o XML público (download.do responde vazio): o caminho é a página
+// do CV (cv?id= -> visualizacv.do, reCAPTCHA v2 + "Submeter"), que devolve o currículo em HTML.
 async function baixar(id: string): Promise<'ok' | 'sem_cv' | 'timeout'> {
   const c = await contexto();
   const page = c.pages()[0] ?? (await c.newPage());
   set('abrindo', `abrindo ${id}`, id);
-  await page.goto(config.lattesDownloadUrl.replace('{id}', id), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.goto(config.lattesCvUrl.replace('{id}', id), { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(1500);
 
   if (await temCaptcha(page)) {
     const { chave } = await chave2Captcha();
     if (chave) {
-      const dl = await resolverAuto(page, id, chave);
-      if (dl) return await salvar(id, dl);
-      // Sem sitekey ou o token não destravou o download: deixa para uma pessoa.
+      const html = await resolverAuto(page, id, chave);
+      if (html) return await salvar(id, html);
+      // Sem sitekey ou o token não abriu o CV: deixa para uma pessoa.
     }
     await pool.query(`UPDATE fila SET status='aguardando_captcha', atualizado_em=now() WHERE lattes_id=$1`, [id]);
-    set('aguardando_captcha', `resolva o captcha de ${id} no navegador (noVNC) e confirme`, id);
-    const dl = await page.waitForEvent('download', { timeout: config.captchaTimeoutMs }).catch(() => null);
-    if (!dl) return 'timeout';
-    return await salvar(id, dl);
+    set('aguardando_captcha', `resolva o captcha de ${id} no navegador (noVNC) e clique em Submeter`, id);
+    const html = await esperarCV(page, config.captchaTimeoutMs);
+    if (!html) return 'timeout';
+    return await salvar(id, html);
   }
-  // Sem captcha na página: ou o download dispara sozinho, ou o CV não existe / o fluxo mudou.
-  const dl = await page.waitForEvent('download', { timeout: 15_000 }).catch(() => null);
-  if (!dl) {
-    await pool.query(
-      `UPDATE fila SET status='sem_cv', ultimo_erro='sem captcha e sem download (CV inexistente ou fluxo do site mudou)', atualizado_em=now() WHERE lattes_id=$1`,
-      [id],
-    );
-    return 'sem_cv';
-  }
-  return await salvar(id, dl);
+  const html = await page.content();
+  if (CV_RE.test(html)) return await salvar(id, html);
+  // Nem captcha nem CV: guarda a página para diagnóstico.
+  const debug = salvarDebug(id, html);
+  await pool.query(
+    `UPDATE fila SET status='sem_cv', ultimo_erro=$2, atualizado_em=now() WHERE lattes_id=$1`,
+    [id, `página sem captcha e sem CV (${page.url().slice(0, 120)}); salva em ${debug}`],
+  );
+  return 'sem_cv';
 }
 
-async function resolverAuto(page: Page, id: string, chave: string): Promise<Download | null> {
+async function resolverAuto(page: Page, id: string, chave: string): Promise<string | null> {
+  // O widget é renderizado depois que o api.js carrega (render=explicit).
+  await page.waitForSelector('iframe[src*="recaptcha"]', { timeout: 20_000 }).catch(() => {});
   const sitekey = await page.evaluate(() => {
     const d = (globalThis as any).document;
     const el = d.querySelector('[data-sitekey]');
     if (el) return el.getAttribute('data-sitekey') as string;
     const f = d.querySelector('iframe[src*="recaptcha"]');
-    return f ? new URL(f.src).searchParams.get('k') : null;
+    if (f) return new URL(f.src).searchParams.get('k');
+    return /'sitekey'\s*:\s*'([^']+)'/.exec(d.documentElement.innerHTML)?.[1] ?? null;
   });
   if (!sitekey) return null;
   set('resolvendo_captcha', `resolvendo o captcha de ${id} via 2Captcha`, id);
   const token = await resolverRecaptcha(chave, sitekey, page.url());
 
-  const download = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
-  await page.evaluate((token) => {
-    const g = globalThis as any;
-    for (const t of g.document.querySelectorAll('textarea[name="g-recaptcha-response"]')) t.value = token;
-    // Callback declarado no HTML (data-callback) ou registrado via grecaptcha.render.
-    const cbs: Function[] = [];
-    const nome = g.document.querySelector('[data-callback]')?.getAttribute('data-callback');
-    if (nome && typeof g[nome] === 'function') cbs.push(g[nome]);
-    const achar = (o: any, n: number) => {
-      if (!o || typeof o !== 'object' || n > 4) return;
-      for (const [k, v] of Object.entries(o)) {
-        if (k === 'callback' && typeof v === 'function') cbs.push(v as Function);
-        else achar(v, n + 1);
-      }
-    };
-    for (const c of Object.values(g.___grecaptcha_cfg?.clients ?? {})) achar(c, 0);
-    for (const cb of new Set(cbs)) cb(token);
-  }, token);
-  // Se o callback já disparou o download, não clica de novo.
-  const cedo = await Promise.race([download, sleep(3000).then(() => undefined)]);
-  if (cedo !== undefined) return cedo;
-  const botao = config.lattesSubmitSelector
-    ? page.locator(config.lattesSubmitSelector)
-    : page.getByRole('button', { name: /baixar|download|confirmar|enviar/i }).or(page.locator('input[type=submit], button[type=submit]'));
-  await botao.first().click({ timeout: 10_000 }).catch(() => {});
-  return await download;
+  // Mesmo efeito do callback da página + "Submeter": token nos dois campos e envia o form.
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => null),
+    page.evaluate((token) => {
+      const d = (globalThis as any).document;
+      for (const t of d.querySelectorAll('textarea[name="g-recaptcha-response"]')) t.value = token;
+      const campo = d.getElementById('tokenCaptchar');
+      if (campo) campo.value = token;
+      d.forms[0].submit();
+    }, token),
+  ]);
+  return await esperarCV(page, 15_000);
 }
 
-async function salvar(id: string, dl: Download): Promise<'ok'> {
+function salvarDebug(id: string, html: string): string {
+  const dir = path.join(paths.html(), '_debug');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}-${Date.now()}.html`);
+  fs.writeFileSync(file, html);
+  return file;
+}
+
+async function salvar(id: string, html: string): Promise<'ok'> {
   set('baixando', `salvando ${id}`, id);
-  const p = await dl.path();
-  const bytes = extractXml(fs.readFileSync(p));
-  if (!Buffer.from(bytes.subarray(0, 4096)).toString('latin1').includes('CURRICULO-VITAE')) {
-    throw new Error('download não é um XML de currículo');
-  }
-  await saveXml(id, bytes, 'manual');
+  const achado = CV_RE.exec(html)?.[1];
+  if (achado !== id) throw new Error(`a página aberta é do CV ${achado}, esperado ${id}; salva em ${salvarDebug(id, html)}`);
+  await saveHtml(id, html);
   state.baixadosNaSessao++;
   return 'ok';
 }

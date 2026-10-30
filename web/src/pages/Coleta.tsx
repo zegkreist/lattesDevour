@@ -20,24 +20,25 @@ export function Coleta() {
   const ritmo = porHora === '' ? c.config.porHora : porHora;
   const intervalo = 3600 / ritmo;
   const k = c.config.chave2Captcha;
+  const novnc = c.novncUrl || `${location.protocol}//${location.hostname}:6080/vnc.html?autoconnect=true&resize=scale`;
   const salvarChave = (valor: string) =>
     api('/coletor/2captcha', { method: 'PUT', body: { chave: valor } })
       .then((r) => { setChave(''); setMsgChave(valor ? `chave salva · saldo US$ ${r.saldo.toFixed(2)}` : 'chave do painel removida'); reload(); })
       .catch((e) => setMsgChave(e.message));
   return (
     <div className="grid">
-      {esperando && <div className="banner"><b>Captcha aguardando:</b> {c.mensagem}. <a href={c.novncUrl} target="_blank" rel="noreferrer">Abrir o navegador do coletor (noVNC)</a>, resolva o reCAPTCHA e confirme o download; o app segue sozinho.</div>}
+      {esperando && <div className="banner"><b>Captcha aguardando:</b> {c.mensagem}. <a href={novnc} target="_blank" rel="noreferrer">Abrir o navegador do coletor (noVNC)</a>, resolva o reCAPTCHA e confirme o download; o app segue sozinho.</div>}
       {c.fase === 'pausado' && <div className="banner">{c.mensagem}</div>}
       <Card titulo="Coletor">
         <p>Estado: <b className={esperando ? 'st-aguardando_captcha' : ''}>{c.rodando ? c.fase : 'parado'}</b> {c.atual && <>· {c.atual}</>} · baixados nesta sessão: {c.baixadosNaSessao}</p>
         <p className="muted">O Lattes exige reCAPTCHA a cada currículo. {c.captchaAuto
-          ? <>Modo automático: o captcha vai para o 2Captcha; se o token não destravar o download, o CV fica esperando uma pessoa no noVNC.</>
+          ? <>Modo automático: o captcha vai para o 2Captcha; se o token não abrir o CV, ele fica esperando uma pessoa no noVNC.</>
           : <>O coletor abre cada CV num navegador real e espera uma pessoa resolver (cadastre a chave do 2Captcha abaixo para o modo automático).</>}{' '}
           Para volume, peça o Extrator Lattes ao CNPq e solte os XMLs/zips na pasta <code>data/import</code>.</p>
         <div className="row">
           <button className="b" disabled={c.rodando} onClick={() => api('/coletor/iniciar', { body: {} }).then(reload)}>Iniciar</button>
           <button className="b sec" disabled={!c.rodando} onClick={() => api('/coletor/parar', { body: {} }).then(reload)}>Parar</button>
-          <a href={c.novncUrl} target="_blank" rel="noreferrer">navegador (noVNC)</a>
+          <a href={novnc} target="_blank" rel="noreferrer">navegador (noVNC)</a>
         </div>
       </Card>
       <div className="grid g2">
@@ -93,7 +94,7 @@ export function Coleta() {
       <Card titulo={`Fila (${Object.entries(stats?.fila ?? {}).map(([k, v]) => `${k}: ${fmt(v as number)}`).join(' · ')})`}>
         <div className="row">
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">todos</option>{['pendente', 'baixando', 'aguardando_captcha', 'baixado', 'parseado', 'erro', 'sem_cv'].map((s) => <option key={s}>{s}</option>)}
+            <option value="">todos</option>{['pendente', 'baixando', 'aguardando_captcha', 'html', 'baixado', 'parseado', 'erro', 'sem_cv'].map((s) => <option key={s}>{s}</option>)}
           </select>
           <button className="b sec" onClick={() => api('/fila/retry-erros', { body: {} }).then((r) => setMsg(`${r.reenfileirados} reenfileirado(s)`))}>Reenfileirar erros</button>
         </div>

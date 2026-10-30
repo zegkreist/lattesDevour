@@ -38,22 +38,36 @@ os dois nunca podem abrir o banco ao mesmo tempo. Cria o `.env` se não existir.
 estágio `single` do `Dockerfile`; o compose usa o estágio `app`. Para publicar no Docker Hub há
 um `build-and-push.sh` local (fora do git, contém credenciais).
 
+### ZimaOS / CasaOS
+
+1. Publique a imagem: `./build-and-push.sh` (gera `zegkreist/lattesdevour:latest`, amd64).
+2. No ZimaOS: App Store → “+” → Instalar app personalizado → Importar → cole
+   [`zimaos/docker-compose.yml`](zimaos/docker-compose.yml), **trocando as duas senhas**.
+3. Painel em `http://<ip-do-zima>:8080`; o link do noVNC no painel aponta para o mesmo host,
+   porta 6080 (defina `NOVNC_URL` se mapear outra porta). Chave do 2Captcha e ritmo: aba Coleta.
+
+Dados em `/media/firstBlood/lattesdevour/{app,pg}` (ajuste no compose se usar outro disco). Diferente do setup local, as portas ficam abertas
+na rede de casa e o painel não tem login: não exponha o NAS para a internet com essas portas.
+Para atualizar: publique de novo e faça pull/recreate do app.
+
 ## Captcha: leia isto
 
-O Lattes protege **a busca e o download do XML com reCAPTCHA v2, a cada currículo**
-(verificado nas páginas `busca.do` e `visualizacv.do`; a busca sem token devolve “Nenhum
-resultado”). Por isso:
+O Lattes **não serve mais o XML público**: `download.do?metodo=apresentar&idcnpq=` responde vazio
+para qualquer ID (verificado em 2026-10-30). O caminho é a página pública do CV:
+`cv?id=<16 dígitos>` → `visualizacv.do?id=K…`, com **reCAPTCHA v2** e o botão “Submeter”, que mostra
+o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisível. Por isso:
 
 - **Modo automático (2Captcha):** com a chave cadastrada na aba Coleta (validada pelo saldo antes
-  de salvar; a do painel vale sobre `TWOCAPTCHA_API_KEY` do `.env`), o coletor manda o
-  reCAPTCHA (sitekey + URL) para o 2Captcha, injeta o token na página, chama o callback do
-  reCAPTCHA e clica no botão de confirmação (achado pelo texto “baixar/download/confirmar/enviar”
-  ou por `LATTES_DOWNLOAD_SUBMIT`). Se o token não destravar o download em 30 s, o CV cai para o
-  modo humano abaixo. Chave inválida, saldo zerado ou IP bloqueado no 2Captcha **pausam** a
+  de salvar; a do painel vale sobre `TWOCAPTCHA_API_KEY` do `.env`), o coletor manda o reCAPTCHA
+  (sitekey + URL) para o 2Captcha, põe o token no formulário e submete. Se o CV não abrir, cai
+  para o modo humano abaixo. Chave inválida, saldo zerado ou IP bloqueado no 2Captcha **pausam** a
   coleta; captcha insolúvel ou timeout (`TWOCAPTCHA_TIMEOUT_MS`, 3 min) contam como tentativa do CV.
-- **Modo humano (sem chave):** abre o CV num Chromium real, marca `aguardando_captcha`, e espera
-  você resolver pelo noVNC e confirmar o download. Se ninguém responder em `CAPTCHA_TIMEOUT_MS`
-  (10 min), **pausa** a coleta e devolve o ID à fila.
+- **Modo humano (sem chave):** marca `aguardando_captcha` e espera você resolver pelo noVNC e
+  clicar em Submeter. Se ninguém responder em `CAPTCHA_TIMEOUT_MS` (10 min), **pausa** a coleta e
+  devolve o ID à fila.
+- **O que é salvo:** `data/app/html/<id>.html`, com a fila em status `html` (aguardando o parser de
+  HTML, ainda não escrito). Página inesperada (nem captcha nem CV) vai para `html/_debug/` e o ID
+  fica `sem_cv` com o caminho no erro. A URL é configurável (`LATTES_CV_URL`).
 - **Ritmo:** nos dois modos, de **60 a 180 CVs por hora** (padrão 60), ajustável na aba Coleta, que
   mostra o intervalo resultante. Os CVs são espaçados de início a início (3600/N s, ±20%, mínimo de
   5 s entre um e outro) e uma janela deslizante de 1 h serve de trava. Custo de referência do
@@ -61,15 +75,12 @@ resultado”). Por isso:
 - Para volume (o Brasil inteiro) o caminho é o **Extrator Lattes do CNPq** (web service para
   instituições de ensino/pesquisa; pedido por `atendimento@cnpq.br`, assunto “Solicitação de
   acesso ao Lattes Extrator”). O que ele entregar (`.xml` ou `.zip`) é só soltar em
-  `data/app/import/`: entra no mesmo parser, sem captcha.
+  `data/app/import/`: entra no parser de XML, sem captcha.
 - O CNPq publica a lista de IDs de todos os currículos
   (<https://memoria.cnpq.br/web/portal-lattes/extracoes-de-dados>). Cole na aba Coleta → “Adicionar IDs”.
 
-> **Não verificado:** o passo pós-captcha (o clique de confirmação, o callback do reCAPTCHA e o
-> formato exato do arquivo baixado) não foi testado contra um CV real; o fluxo foi implementado a
-> partir da estrutura genérica da página, e a URL e o botão são configuráveis
-> (`LATTES_DOWNLOAD_URL`, `LATTES_DOWNLOAD_SUBMIT`) caso o site mude. O cliente do 2Captcha tem
-> teste com a API mockada.
+> **Não verificado:** a resolução pelo 2Captcha de ponta a ponta (token aceito pelo Lattes) e o
+> formato do HTML do CV; até então o fluxo foi conferido até o captcha (sitekey, formulário e campos).
 
 ## Como achar pesquisadores
 
@@ -141,7 +152,7 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 
 ## Limitações conhecidas
 
-- Coleta nominal exige captcha (humano ou 2Captcha, acima); descoberta via ORCID cobre só parte dos pesquisadores.
+- Coleta nominal exige captcha (humano ou 2Captcha, acima) e salva HTML, que ainda não tem parser; descoberta via ORCID acha o link do Lattes em só ~5% dos perfis.
 - O grafo só liga pesquisadores **já coletados** (coautores externos com ID ainda não viram nós).
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.
 - O backup em nuvem faz tarball completo dos XMLs a cada rodada (não incremental).

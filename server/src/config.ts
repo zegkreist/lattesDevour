@@ -6,13 +6,9 @@ export const config = {
   port: Number(env.PORT ?? 8080),
   databaseUrl: env.DATABASE_URL ?? 'postgres://lattes:lattes@localhost:5432/lattes',
   dataDir: env.DATA_DIR ?? path.resolve('data'),
-  // Template da URL de download do XML (depois do captcha). O Lattes já mudou isso antes,
-  // por isso é configurável sem rebuild.
-  lattesDownloadUrl:
-    env.LATTES_DOWNLOAD_URL ||
-    'https://buscatextual.cnpq.br/buscatextual/download.do?metodo=apresentar&idcnpq={id}',
-  // Seletor do botão que confirma o download depois do captcha (vazio = acha pelo texto).
-  lattesSubmitSelector: env.LATTES_DOWNLOAD_SUBMIT ?? '',
+  // Página pública do CV ({id} = ID Lattes de 16 dígitos): redireciona para visualizacv.do,
+  // que pede reCAPTCHA v2. Configurável sem rebuild caso o Lattes mude.
+  lattesCvUrl: env.LATTES_CV_URL || 'https://buscatextual.cnpq.br/buscatextual/cv?id={id}',
   captchaTimeoutMs: Number(env.CAPTCHA_TIMEOUT_MS ?? 10 * 60_000),
   // Com chave, o captcha é resolvido pelo 2Captcha; sem chave, por uma pessoa via noVNC.
   twoCaptcha: {
@@ -21,7 +17,8 @@ export const config = {
   },
   // O navegador do coletor precisa de tela (o captcha é resolvido por uma pessoa via noVNC).
   headless: env.COLLECTOR_HEADLESS === 'true',
-  novncUrl: env.NOVNC_URL ?? 'http://localhost:6080/vnc.html?autoconnect=true&resize=scale',
+  // Vazio = o painel monta o link com o host em que foi aberto, porta 6080 (ex.: no NAS).
+  novncUrl: env.NOVNC_URL || '',
   backup: {
     s3Bucket: env.BACKUP_S3_BUCKET ?? '',
     s3Prefix: env.BACKUP_S3_PREFIX ?? 'lattes-devour/',
@@ -35,6 +32,7 @@ export const config = {
 
 export const paths = {
   xml: () => path.join(config.dataDir, 'xml'),
+  html: () => path.join(config.dataDir, 'html'),
   imports: () => path.join(config.dataDir, 'import'),
   backups: () => path.join(config.dataDir, 'backups'),
   browserProfile: () => path.join(config.dataDir, 'browser-profile'),

@@ -1,0 +1,76 @@
+# lattesDevour no ZimaOS — container único (Postgres + painel + coletor + noVNC).
+# App Store → "+" → Instalar app personalizado → Importar → cole este arquivo.
+# Antes de importar troque POSTGRES_PASSWORD e VNC_PASSWORD. Para atualizar: publique com
+# ./build-and-push.sh e faça pull/recreate do app.
+name: lattesdevour
+services:
+  main_app:
+    cpu_shares: 50
+    command: []
+    container_name: lattesDevour
+    deploy:
+      resources:
+        limits:
+          memory: 4GB          # Chromium do coletor + Postgres
+          cpus: "2.00"
+        reservations:
+          memory: 512MB
+          cpus: "0.00"
+      placement: {}
+    entrypoint: null
+    environment:
+      # Banco interno, só escuta dentro do container; vale na 1ª inicialização do banco.
+      POSTGRES_PASSWORD: troque-esta-senha
+      # O noVNC fica aberto na rede de casa.
+      VNC_PASSWORD: troque-esta-senha
+      PUID: "1000"
+      PGID: "1000"
+      TZ: America/Sao_Paulo
+      # Chave do 2Captcha e ritmo (CVs/hora): pelo painel, aba Coleta.
+      # Backup em S3 (opcional): BACKUP_S3_BUCKET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/coletor').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    image: zegkreist/lattesdevour:latest
+    labels:
+      icon: https://cdn.simpleicons.org/googlescholar
+    network_mode: bridge
+    ports:
+      - target: 8080         # painel
+        published: "8080"
+        protocol: tcp
+      - target: 6080         # noVNC (o painel linka para <host>:6080)
+        published: "6080"
+        protocol: tcp
+    restart: unless-stopped
+    shm_size: 1gb            # o Chromium precisa de /dev/shm grande
+    stop_grace_period: 30s   # para o app e depois o Postgres, sem recovery
+    volumes:
+      # XMLs crus, pasta de import do Extrator, backups e perfil do navegador
+      - type: bind
+        source: /media/firstBlood/lattesdevour/app
+        target: /data
+        bind:
+          create_host_path: true
+      # Postgres: a base inteira já parseada. NUNCA apague.
+      - type: bind
+        source: /media/firstBlood/lattesdevour/pg
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: true
+x-casaos:
+  author: self
+  category: self
+  hostname: ""
+  icon: https://cdn.simpleicons.org/googlescholar
+  index: /
+  is_uncontrolled: false
+  main: main_app
+  port_map: "8080"
+  scheme: http
+  store_app_id: lattesdevour
+  title:
+    custom: lattesDevour

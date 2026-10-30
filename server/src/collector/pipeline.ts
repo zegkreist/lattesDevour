@@ -12,6 +12,19 @@ export function xmlPathFor(id: string): string {
   return path.join(paths.xml(), `${id}.xml`);
 }
 
+/** Guarda o HTML do CV (página pública) e marca a fila como 'html' até existir parser de HTML. */
+export async function saveHtml(id: string, html: string): Promise<string> {
+  fs.mkdirSync(paths.html(), { recursive: true });
+  const file = path.join(paths.html(), `${id}.html`);
+  fs.writeFileSync(file + '.tmp', html);
+  fs.renameSync(file + '.tmp', file);
+  await pool.query(
+    `UPDATE fila SET status='html', html_path=$2, ultimo_erro=NULL, atualizado_em=now() WHERE lattes_id=$1`,
+    [id, file],
+  );
+  return file;
+}
+
 /** Guarda o XML cru (no encoding original) em disco e marca a fila como baixado. */
 export async function saveXml(id: string, bytes: Uint8Array, origem = 'manual'): Promise<string> {
   fs.mkdirSync(paths.xml(), { recursive: true });
