@@ -438,12 +438,17 @@ export async function rotas(app: FastifyInstance): Promise<void> {
     // Pesquisadores coletados trazem região/instituição; os demais só o nome que aparece nas autorias.
     const ps = await pool.query(
       `SELECT u.id, COALESCE(p.nome, (SELECT min(nome) FROM autoria WHERE autor_lattes_id = u.id)) AS nome,
-              p.regiao, p.uf, i.nome AS instituicao, p.id IS NOT NULL AS coletado
-       FROM unnest($1::text[]) u(id) LEFT JOIN pesquisador p ON p.id = u.id LEFT JOIN instituicao i ON i.id = p.instituicao_id`,
+              p.regiao, p.uf, i.nome AS instituicao, p.id IS NOT NULL AS coletado,
+              o.id IS NOT NULL AS orientador, o.pos_doutorado, o.doutorado, o.mestrado, o.outras
+       FROM unnest($1::text[]) u(id) LEFT JOIN pesquisador p ON p.id = u.id LEFT JOIN instituicao i ON i.id = p.instituicao_id
+       LEFT JOIN orientador o ON o.id = u.id`,
       [ids],
     );
+    // classe: orientador (tem orientações no próprio CV) ou pesquisador; a cor continua sendo a região.
     const pessoa = (p: any) => ({
       id: p.id, label: p.nome ?? p.id, kind: 'pesquisador', grupo: p.regiao ?? (p.coletado ? 'sem região' : 'não coletado'),
+      classe: p.orientador ? 'orientador' : 'pesquisador',
+      orientacoes: p.orientador ? { pos_doutorado: p.pos_doutorado, doutorado: p.doutorado, mestrado: p.mestrado, outras: p.outras } : undefined,
       uf: p.uf, instituicao: p.instituicao, lattesId: p.coletado ? p.id : undefined, nivel: nivel.get(p.id),
     });
 

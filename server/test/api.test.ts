@@ -55,6 +55,10 @@ d('API (Postgres)', () => {
     const rede = await get('/api/graph?modo=colab&regiao=sudeste&niveis=2');
     expect(rede.nodes.find((n: any) => n.id === '1111111111111111').nivel).toBe(0);
     expect((await get('/api/graph?modo=colab&regiao=sul&niveis=2')).nodes).toHaveLength(0);
+    // Classe orientador: quem tem orientação no próprio CV (a fixture tem 1 de mestrado e 1 outra)
+    // vem marcado, com a contagem por nível; quem não tem fica como pesquisador.
+    expect(rede.nodes.find((n: any) => n.id === '1111111111111111')).toMatchObject({ classe: 'orientador', orientacoes: { doutorado: 0, mestrado: 1, outras: 1 } });
+    expect(rede.nodes.filter((n: any) => n.id !== '1111111111111111').every((n: any) => n.classe === 'pesquisador')).toBe(true);
     expect((await get('/api/pesquisadores/1111111111111111')).obras).toHaveLength(5);
     expect((await get('/api/facets')).ufs).toEqual([{ v: 'MG', n: '1' }]);
     expect((await get('/api/stats')).totais.obras).toBe(5);

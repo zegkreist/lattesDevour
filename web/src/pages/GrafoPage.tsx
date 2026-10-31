@@ -42,7 +42,7 @@ export function GrafoPage() {
           : g.nodes.length === 0 ? <p className="muted" style={{ padding: 20 }}>Sem dados para este filtro. O grafo só liga pesquisadores já parseados.</p>
           : <Graph nodes={g.nodes} edges={g.edges} onOpen={(n: GNode) => n.lattesId && setPerfil(n.lattesId)} />}
       </div>
-      <p className="muted">Arraste para mover, roda do mouse para zoom. Clique num ponto para fixar o grupo dele; duplo clique abre o perfil. O filtro define os pontos de partida (anel escuro); a rede cresce a partir deles. Cor = região (pesquisadores) ou tipo (obras). Espessura = nº de obras em comum.</p>
+      <p className="muted">Arraste para mover, roda do mouse para zoom. Clique num ponto para fixar o grupo dele; duplo clique abre o perfil. O filtro define os pontos de partida (anel escuro); a rede cresce a partir deles. Cor = região (pesquisadores) ou tipo (obras); losango = orientador (tem orientações no CV). Linha tracejada = orientação. Espessura = nº de obras em comum.</p>
       {perfil && <PerfilModal id={perfil} onClose={() => setPerfil(null)} onOpen={setPerfil} />}
     </div>
   );

@@ -46,6 +46,9 @@ button.b:disabled { opacity: .5; cursor: default; }
 .tip { position: fixed; pointer-events: none; z-index: 50; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font-size: 12px; max-width: 320px; box-shadow: 0 4px 14px rgba(0,0,0,.15); display: none; }
 .legend { position: absolute; left: 12px; bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
 .legend span i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+.legend span i.forma { background: var(--muted); }
+.legend span i.losango { border-radius: 0; transform: rotate(45deg) scale(.85); }
+.legend span i.tracejado { width: 16px; height: 0; border-radius: 0; border-top: 2px dashed var(--muted); vertical-align: middle; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 40; display: flex; justify-content: flex-end; }
 .modal.centro { justify-content: center; align-items: center; }
 .modal.centro .panel { height: auto; border-radius: 10px; width: min(460px, 94%); }

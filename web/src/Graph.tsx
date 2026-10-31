@@ -4,10 +4,14 @@
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type Simulation } from 'd3-force';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-export interface GNode { id: string; label: string; kind: 'pesquisador' | 'obra'; grupo: string; uf?: string; instituicao?: string; ano?: number; lattesId?: string; nivel?: number }
+type Orientacoes = { pos_doutorado: number; doutorado: number; mestrado: number; outras: number };
+export interface GNode {
+  id: string; label: string; kind: 'pesquisador' | 'obra'; grupo: string; uf?: string; instituicao?: string; ano?: number; lattesId?: string; nivel?: number;
+  classe?: 'pesquisador' | 'orientador'; orientacoes?: Orientacoes;
+}
 export interface GEdge { a: string; b: string; w: number; tipo?: string }
 interface N extends GNode { x: number; y: number; vx: number; vy: number; fx?: number | null; fy?: number | null; grau: number }
-interface E { a: number; b: number; w: number }
+interface E { a: number; b: number; w: number; tipo?: string }
 
 const PALETA = ['#1f6feb', '#d97706', '#059669', '#9333ea', '#dc2626', '#0891b2', '#65a30d', '#db2777', '#64748b'];
 export function corDoGrupo(grupo: string, grupos: string[]): string {
@@ -15,6 +19,18 @@ export function corDoGrupo(grupo: string, grupos: string[]): string {
   return i < 0 ? '#94a3b8' : PALETA[i % PALETA.length];
 }
 const raio = (n: N) => (n.kind === 'obra' ? 3.5 : Math.min(4 + Math.sqrt(n.grau) * 1.8, 15));
+// Até onde a forma chega (o losango passa do raio): anéis, clique e colisão usam isto.
+const alcance = (n: N) => (n.classe === 'orientador' ? raio(n) * 1.35 : raio(n));
+// Forma = classe: obra quadrado, orientador losango, demais pesquisadores círculo.
+function forma(ctx: CanvasRenderingContext2D, n: N) {
+  const r = raio(n);
+  if (n.kind === 'obra') ctx.rect(n.x - r, n.y - r, r * 2, r * 2);
+  else if (n.classe === 'orientador') {
+    const d = alcance(n);
+    ctx.moveTo(n.x, n.y - d); ctx.lineTo(n.x + d, n.y); ctx.lineTo(n.x, n.y + d); ctx.lineTo(n.x - d, n.y); ctx.closePath();
+  } else ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+}
+const NIVEIS_ORI: [keyof Orientacoes, string][] = [['pos_doutorado', 'pós-doc'], ['doutorado', 'dout.'], ['mestrado', 'mest.'], ['outras', 'outras']];
 
 export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]; onOpen: (n: GNode) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -35,7 +51,7 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     for (const e of edges) {
       const a = idx.get(e.a), b = idx.get(e.b);
       if (a === undefined || b === undefined || a === b) continue;
-      es.push({ a, b, w: e.w });
+      es.push({ a, b, w: e.w, tipo: e.tipo });
       ns[a].grau += e.w; ns[b].grau += e.w;
     }
     return { ns, es };
@@ -65,27 +81,26 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
       const dim = hi && !(hi.has(e.a) && hi.has(e.b));
       ctx.lineWidth = Math.min(1 + Math.log2(e.w + 1) * 0.6, 4) / scale;
       ctx.strokeStyle = dim ? 'rgba(148,163,184,0.10)' : 'rgba(100,116,139,0.45)';
+      ctx.setLineDash(e.tipo === 'orientacao' ? [5 / scale, 3 / scale] : []);
       ctx.beginPath(); ctx.moveTo(g.ns[e.a].x, g.ns[e.a].y); ctx.lineTo(g.ns[e.b].x, g.ns[e.b].y); ctx.stroke();
     }
+    ctx.setLineDash([]);
     g.ns.forEach((n, i) => {
       ctx.globalAlpha = hi && !hi.has(i) ? 0.18 : 1;
       ctx.fillStyle = n.kind === 'obra' ? '#94a3b8' : corDoGrupo(n.grupo, grupos);
-      ctx.beginPath();
-      if (n.kind === 'obra') ctx.rect(n.x - raio(n), n.y - raio(n), raio(n) * 2, raio(n) * 2);
-      else ctx.arc(n.x, n.y, raio(n), 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); forma(ctx, n); ctx.fill();
       if (n.nivel === 0 && n.kind === 'pesquisador') {
         ctx.strokeStyle = dark ? '#e6edf3' : '#1e293b'; ctx.lineWidth = 1.5 / scale;
-        ctx.beginPath(); ctx.arc(n.x, n.y, raio(n) + 2 / scale, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(n.x, n.y, alcance(n) + 2 / scale, 0, Math.PI * 2); ctx.stroke();
       }
       if (i === sel.current) {
         ctx.strokeStyle = dark ? '#e6edf3' : '#1e293b'; ctx.lineWidth = 2 / scale;
-        ctx.beginPath(); ctx.arc(n.x, n.y, raio(n) + 3 / scale, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(n.x, n.y, alcance(n) + 3 / scale, 0, Math.PI * 2); ctx.stroke();
       }
       if (hi?.has(i) || (!hi && scale > 1.8 && n.kind === 'pesquisador')) {
         ctx.globalAlpha = 1; ctx.fillStyle = dark ? '#e6edf3' : '#1e293b';
         ctx.font = `${Math.max(10, 11 / scale)}px system-ui, sans-serif`;
-        ctx.fillText(n.label.length > 48 ? n.label.slice(0, 47) + '…' : n.label, n.x + raio(n) + 3, n.y + 3);
+        ctx.fillText(n.label.length > 48 ? n.label.slice(0, 47) + '…' : n.label, n.x + alcance(n) + 3, n.y + 3);
       }
     });
     ctx.restore();
@@ -99,7 +114,7 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     const sim = forceSimulation<N>(g.ns)
       .force('charge', forceManyBody().strength(-160))
       .force('link', forceLink<N, any>(links).distance(60))
-      .force('collide', forceCollide<N>((d) => raio(d) + 2))
+      .force('collide', forceCollide<N>((d) => alcance(d) + 2))
       .force('center', forceCenter(0, 0))
       .alphaDecay(1 - Math.pow(0.001, 1 / iter))
       .on('tick', () => drawRef.current());
@@ -126,7 +141,7 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
   const hit = (cx: number, cy: number): number | null => {
     const { x, y } = toWorld(cx, cy);
     for (let i = g.ns.length - 1; i >= 0; i--) {
-      const n = g.ns[i], r = raio(n) + 2;
+      const n = g.ns[i], r = alcance(n) + 2;
       if ((n.x - x) ** 2 + (n.y - y) ** 2 <= r * r) return i;
     }
     return null;
@@ -141,6 +156,12 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     const d = document.createElement('div'); d.className = 'muted';
     d.textContent = n.kind === 'obra' ? `${n.grupo}${n.ano ? ' · ' + n.ano : ''}` : [n.nivel === 0 ? 'resultado da busca' : n.nivel ? `nível ${n.nivel}` : '', n.instituicao, n.uf].filter(Boolean).join(' · ') || n.grupo;
     t.append(d);
+    const o = n.orientacoes;
+    if (o) {
+      const od = document.createElement('div'); od.className = 'muted';
+      od.textContent = 'orientador: ' + NIVEIS_ORI.filter(([k]) => o[k]).map(([k, r]) => `${o[k]} ${r}`).join(' · ');
+      t.append(od);
+    }
   };
 
   return (
@@ -177,6 +198,8 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
       />
       <div ref={tipRef} className="tip" />
       <div className="legend">
+        {nodes.some((n) => n.classe === 'orientador') && <><span><i className="forma" />pesquisador</span><span><i className="forma losango" />orientador</span></>}
+        {edges.some((e) => e.tipo === 'orientacao') && <span><i className="tracejado" />orientação</span>}
         {grupos.map((gr) => (
           <span key={gr}>
             <i style={{ background: nodes.find((n) => n.grupo === gr)?.kind === 'obra' ? '#94a3b8' : corDoGrupo(gr, grupos) }} />
