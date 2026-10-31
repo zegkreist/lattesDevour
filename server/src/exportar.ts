@@ -9,17 +9,16 @@ import { pool } from './db.js';
 // DuckDB, Spark, Power BI. O DuckDB lê o Postgres pela extensão postgres (baixada uma vez para
 // data/duckdb-ext) e preserva os tipos: text[] vira lista, jsonb vira texto JSON.
 // Fica de fora o que é segredo ou interno: settings guarda a chave do 2Captcha.
-const FORA = new Set(['settings', 'schema_migrations']);
+export const FORA = new Set(['settings', 'schema_migrations']);
 
 const sql = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
 
 let exportando = false;
 
-export async function exportarParquet(): Promise<{ dir: string; tabelas: { tabela: string; linhas: number; bytes: number }[] }> {
+export async function exportarParquet(dir = paths.exports()): Promise<{ dir: string; tabelas: { tabela: string; linhas: number; bytes: number }[] }> {
   if (exportando) throw new Error('exportação já em andamento');
   exportando = true;
-  const dir = paths.exports();
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(paths.duckdbExt(), { recursive: true });
   const db = await DuckDBInstance.create(':memory:');

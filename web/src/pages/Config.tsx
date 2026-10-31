@@ -9,6 +9,23 @@ export function Config() {
   const [msg, setMsg] = useState<Record<string, string>>({});
   const [chave, setChave] = useState('');
   const [busy, setBusy] = useState(false);
+  const [apagando, setApagando] = useState(false);
+  const [senha, setSenha] = useState('');
+  const [erroApagar, setErroApagar] = useState('');
+  const apagar = async () => {
+    setBusy(true);
+    setErroApagar('');
+    try {
+      const r = await api('/db/limpar', { body: { senha } });
+      setApagando(false);
+      diz('limpar', `${fmt(r.linhas)} linha(s) de ${r.tabelas} tabelas apagadas · cópia em ${r.dir}`);
+      reload(); reloadEx();
+    } catch (e: any) {
+      setErroApagar(e.message);
+    }
+    setSenha('');
+    setBusy(false);
+  };
   const diz = (k: string, v: string) => setMsg((m) => ({ ...m, [k]: v }));
   const rodar = async (k: string, f: () => Promise<string>) => {
     setBusy(true);
@@ -75,6 +92,30 @@ export function Config() {
           </details>
         )}
       </Card>
+      <Card titulo="Apagar todo o banco">
+        <p className="muted">
+          Grava uma cópia em Parquet (<code>exports/antes-de-limpar-…</code>) e esvazia todas as tabelas. Ficam a chave do 2Captcha, o ritmo e os arquivos XML/HTML em disco.
+        </p>
+        <div className="row">
+          <button className="b bad" disabled={busy} onClick={() => { setSenha(''); setApagando(true); }}>Apagar todo o banco…</button>
+          <span className="muted">{msg.limpar}</span>
+        </div>
+      </Card>
+      {apagando && (
+        <div className="modal centro" onClick={() => !busy && setApagando(false)}>
+          <div className="panel" onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ marginTop: 0 }}>Apagar todo o banco?</h2>
+            <p>Pesquisadores, obras, autorias, orientações e a fila serão apagados. Antes, o app grava uma cópia em Parquet; se a cópia falhar, nada é apagado.</p>
+            <input type="password" autoComplete="off" autoFocus placeholder="senha do banco de dados" value={senha} onChange={(e) => setSenha(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && senha && apagar()} style={{ width: '100%' }} />
+            {erroApagar && <p className="err">{erroApagar}</p>}
+            <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+              <button className="b sec" disabled={busy} onClick={() => setApagando(false)}>Cancelar</button>
+              <button className="b bad" disabled={!senha || busy} onClick={apagar}>{busy ? 'apagando…' : 'Apagar tudo'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

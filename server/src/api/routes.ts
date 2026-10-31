@@ -10,6 +10,7 @@ import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
 import { enfileirar, extrairIds, PRIORIDADE } from '../discovery/ids.js';
 import { exportarParquet } from '../exportar.js';
+import { limparBanco, senhaConfere } from '../limpar.js';
 import { currentParserVersion, listParsers } from '../parsers/index.js';
 import { norm, slug } from '../util/text.js';
 
@@ -252,6 +253,15 @@ export async function rotas(app: FastifyInstance): Promise<void> {
   });
   app.post('/api/backup', async () => fazerBackup());
   app.post('/api/exportar', async () => exportarParquet());
+  // Zera o banco depois de uma cópia em Parquet; exige a senha do Postgres.
+  app.post<{ Body: { senha?: string } }>('/api/db/limpar', async (req, reply) => {
+    if (!senhaConfere(String(req.body?.senha ?? ''))) return reply.code(403).send({ erro: 'senha do banco incorreta' });
+    try {
+      return await limparBanco();
+    } catch (e) {
+      return reply.code(500).send({ erro: e instanceof Error ? e.message : String(e) });
+    }
+  });
   app.get('/api/exportar', async () => {
     const dir = paths.exports();
     const arquivos = fs.existsSync(dir)

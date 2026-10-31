@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import fs from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -16,6 +18,7 @@ d('API (Postgres)', () => {
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url;
+    process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ld-test-'));
     const db = await import('../src/db.js');
     pool = db.pool;
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
@@ -71,5 +74,18 @@ d('API (Postgres)', () => {
   it('enfileira só IDs de 16 dígitos', async () => {
     const r = await app.inject({ method: 'POST', url: '/api/fila/enfileirar', payload: { texto: 'http://lattes.cnpq.br/3333333333333333 4444444444444444 123 12345678901234567' } });
     expect(r.json()).toEqual({ encontrados: 2, novos: 2 });
+  });
+
+  it('apagar o banco: exige a senha, grava Parquet e esvazia (mantém settings)', async () => {
+    await pool.query(`INSERT INTO settings (chave, valor) VALUES ('teste', '1') ON CONFLICT DO NOTHING`);
+    const senha = decodeURIComponent(new URL(url!).password);
+    expect((await app.inject({ method: 'POST', url: '/api/db/limpar', payload: { senha: 'errada' } })).statusCode).toBe(403);
+    expect((await pool.query('SELECT count(*) FROM pesquisador')).rows[0].count).toBe('1');
+    const r = await app.inject({ method: 'POST', url: '/api/db/limpar', payload: { senha } });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(fs.existsSync(path.join(r.json().dir, 'pesquisador.parquet'))).toBe(true);
+    expect((await pool.query('SELECT count(*) FROM pesquisador')).rows[0].count).toBe('0');
+    expect((await pool.query('SELECT count(*) FROM obra')).rows[0].count).toBe('0');
+    expect((await pool.query(`SELECT count(*) FROM settings WHERE chave='teste'`)).rows[0].count).toBe('1');
   });
 });
