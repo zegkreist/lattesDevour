@@ -1,54 +1,328 @@
 # Lattes Devour
 
-Coleta currículos Lattes, guarda o XML cru em disco, converte em tabelas num PostgreSQL
+Coleta currículos Lattes, guarda o arquivo cru em disco, converte em tabelas num PostgreSQL
 (pesquisadores, obras, autorias, orientações) e serve um painel com busca por região, tema,
-título, instituição e tags, mais um grafo de colaboradores e obras. Inspirado no
-[scriptLattes](https://github.com/jpmenachalco/scriptLattes), mas guardando num banco em vez de
-gerar um site estático.
+título, instituição e tags, mais um grafo de colaboradores e obras.
+
+Baseado no **[scriptLattes](https://github.com/jpmenachalco/scriptLattes)**, de Jesús P. Mena-Chalco
+e Roberto M. Cesar Jr., mas guardando num banco em vez de gerar um site estático
+(veja [Créditos](#créditos)).
 
 ```
  navegador ──► app (Node/TS)  ── API + front + coletor (Chromium) + parse + backup
                  │   └── noVNC :6080  (o navegador do coletor, para resolver captcha)
                  └──► db (Postgres 17)
-   host:  ./data/pg  (banco)   ./data/app  (xml/, import/, backups/, browser-profile/)
+   host:  ./data/pg  (banco)   ./data/app  (xml/, html/, import/, backups/, exports/, browser-profile/)
 ```
 
-## Subir
+**Neste guia:** [Instalação](#instalação) · [Primeiro uso](#primeiro-uso) ·
+[Atualizar e mover](#atualizar-parar-e-mover) · [Problemas comuns](#problemas-comuns) ·
+[Colocar online num domínio](#colocar-online-num-domínio)
+
+## Instalação
+
+**Você precisa de:** Docker com Compose v2 (`docker compose version` tem de responder) e internet
+de saída. Como referência, reserve 2 CPUs e 4 GB de RAM, por causa do Chromium e do Postgres. O disco
+cresce com a base. A imagem pronta do Docker Hub é só `amd64`.
+
+### 1. Baixar e configurar
 
 ```bash
-cp .env.example .env        # ajuste a senha do banco e LATTES_UID/GID (id -u; id -g)
+git clone https://github.com/zegkreist/lattesDevour.git
+cd lattesDevour
+cp .env.example .env
+
+# Senhas e dono dos arquivos em ./data/app
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env
+sed -i "s/^VNC_PASSWORD=.*/VNC_PASSWORD=$(openssl rand -hex 4)/" .env
+sed -i "s/^LATTES_UID=.*/LATTES_UID=$(id -u)/; s/^LATTES_GID=.*/LATTES_GID=$(id -g)/" .env
+```
+
+Guarde o `.env`. Três cuidados com as senhas:
+
+- **`POSTGRES_PASSWORD` só vale na primeira inicialização do banco.** Trocar depois exige o passo
+  descrito em [Problemas comuns](#problemas-comuns).
+- **Evite `@`, `:` e `/` nela**, porque a senha entra numa URL de conexão. O comando acima gera só
+  letras e números. Essa mesma senha é pedida para apagar o banco pelo painel.
+- **O VNC só usa os 8 primeiros caracteres** de `VNC_PASSWORD`, por isso o comando gera 8.
+
+### 2. Subir
+
+```bash
 docker compose up -d --build
-# painel: http://localhost:8080      navegador do coletor (noVNC): http://localhost:6080
 ```
 
-Dois containers (`app`, `db`). Tudo que importa fica no host em `./data` e sobrevive a
-`docker compose down`. As portas só escutam em `127.0.0.1`.
+O primeiro build baixa o Chromium e leva alguns minutos. As tabelas são criadas sozinhas quando o app
+sobe.
 
-### Container único
+### 3. Conferir
 
 ```bash
-./single.sh                                 # build local e sobe Postgres + app num container só
-./single.sh zegkreist/lattesdevour:latest   # mesma coisa, com a imagem do Docker Hub
+docker compose ps                              # app e db em "running"
+curl -s http://localhost:8080/api/coletor      # responde um JSON com "rodando"
+docker compose logs -f app                     # acompanha o log, se algo falhar
+```
+
+| O quê | Onde |
+|---|---|
+| Painel | <http://localhost:8080> |
+| Navegador do coletor (noVNC) | <http://localhost:6080/vnc.html?autoconnect=true&resize=scale> |
+| Seus dados | `./data` (sobrevive a `docker compose down`) |
+
+As portas só escutam em `127.0.0.1`. Num servidor remoto, veja
+[Colocar online num domínio](#colocar-online-num-domínio).
+
+### Outras formas de instalar
+
+#### Container único
+
+Postgres e app num container só, sem precisar de Compose para rodar:
+
+```bash
+./single.sh                                 # build local
+./single.sh zegkreist/lattesdevour:latest   # usa a imagem do Docker Hub
 ./single.sh --stop
 ```
 
-Usa os mesmos `./data/app` e `./data/pg` do compose (o Postgres roda como uid 999 e locale
-`en_US.UTF-8`, como na imagem oficial), por isso o script derruba o compose antes de subir:
-os dois nunca podem abrir o banco ao mesmo tempo. Cria o `.env` se não existir. A imagem é o
-estágio `single` do `Dockerfile`; o compose usa o estágio `app`. Para publicar no Docker Hub há
-um `build-and-push.sh` local (fora do git, contém credenciais).
+Usa os mesmos `./data/app` e `./data/pg` do Compose (o Postgres roda como uid 999 e locale
+`en_US.UTF-8`, como na imagem oficial), por isso o script derruba o Compose antes de subir: os dois
+nunca podem abrir o banco ao mesmo tempo. Cria o `.env` se não existir. A imagem é o estágio `single`
+do `Dockerfile`; o Compose usa o estágio `app`. Para publicar no Docker Hub há um `build-and-push.sh`
+local (fora do git, contém credenciais).
 
-### ZimaOS / CasaOS
+> O `single.sh` fixa o link do noVNC em `localhost`. Para publicar num domínio, use o Compose.
+
+#### ZimaOS / CasaOS
 
 1. Publique a imagem: `./build-and-push.sh` (gera `zegkreist/lattesdevour:latest`, amd64).
 2. No ZimaOS: App Store → “+” → Instalar app personalizado → Importar → cole
    [`zimaos/docker-compose.yml`](zimaos/docker-compose.yml), **trocando as duas senhas**.
-3. Painel em `http://<ip-do-zima>:8080`; o link do noVNC no painel aponta para o mesmo host,
-   porta 6080 (defina `NOVNC_URL` se mapear outra porta). Ritmo e caminho: aba Coleta; chave do 2Captcha: Configurações.
+3. Painel em `http://<ip-do-zima>:8080`. O link do noVNC no painel aponta para o mesmo host, porta 6080
+   (defina `NOVNC_URL` se mapear outra porta). Ritmo e caminho ficam na aba Coleta; a chave do 2Captcha,
+   em Configurações.
 
-Dados em `/media/firstBlood/lattesdevour/{app,pg}` (ajuste no compose se usar outro disco). Diferente do setup local, as portas ficam abertas
-na rede de casa e o painel não tem login: não exponha o NAS para a internet com essas portas.
-Para atualizar: publique de novo e faça pull/recreate do app.
+Dados em `/media/firstBlood/lattesdevour/{app,pg}` (ajuste no compose se usar outro disco). Diferente
+do setup local, as portas ficam abertas na rede de casa e o painel não tem login: **não encaminhe
+essas portas no roteador**. Para acessar de fora, use o
+[Cloudflare Tunnel](#opção-b-cloudflare-tunnel-sem-abrir-portas). Para atualizar: publique de novo e
+faça pull/recreate do app.
+
+## Primeiro uso
+
+1. **Coleta → Adicionar CVs:** cole um link (`lattes.cnpq.br/<ID>`) ou um ID de 16 dígitos e clique em
+   **Adicionar**.
+2. **Coleta → Coletor:** escolha o caminho de download. “Prévia da busca” usa captcha invisível; “Link
+   direto” pede o captcha resolvido por você no noVNC ou pelo 2Captcha (chave em Configurações).
+3. Clique em **Iniciar**. Nada é baixado até isso. A seção [Captcha](#captcha-leia-isto) explica as
+   opções e os limites.
+4. Com o CV parseado, ele aparece em **Busca**, **Grafo** e **Painel**.
+
+## Atualizar, parar e mover
+
+```bash
+git pull && docker compose up -d --build     # atualizar (as migrações rodam sozinhas)
+docker compose down                          # parar (os dados ficam em ./data)
+```
+
+**Mudar de servidor:** pare o app e copie `data/` e `.env` preservando os donos dos arquivos (o banco
+pertence a outro usuário, por isso o `sudo`):
+
+```bash
+docker compose down
+sudo tar czpf lattes.tgz data .env           # no servidor antigo
+sudo tar xzpf lattes.tgz                     # no novo, dentro da pasta do projeto
+```
+
+Sobre cópias periódicas, veja [Backup](#backup).
+
+## Problemas comuns
+
+| Sintoma | Causa e solução |
+|---|---|
+| `port is already allocated` | Outra coisa usa a porta. Mude `APP_PORT` ou `NOVNC_PORT` no `.env`. Se mudar a do noVNC, ajuste também `NOVNC_URL`. |
+| `password authentication failed` no log | O `.env` mudou depois que o banco foi criado. Volte a senha antiga ou aplique a nova: `docker compose exec db psql -U lattes -d lattes -c "ALTER ROLE lattes PASSWORD 'senha-do-env'"`. |
+| Erro de URL inválida ao conectar no banco | A senha tem `@`, `:` ou `/`. Use só letras e números. |
+| `permission denied` em `./data/app` | Confira `LATTES_UID` e `LATTES_GID` no `.env` (`id -u`; `id -g`) e recrie o container. |
+| Link do noVNC abre `localhost` ou porta errada | Defina `NOVNC_URL` no `.env` e rode `docker compose up -d`. |
+| Coleta para em “pausado” ou “aguardando captcha” | É esperado. Resolva pelo noVNC ou revise o 2Captcha, conforme a mensagem na aba Coleta. Veja [Captcha](#captcha-leia-isto). |
+| Próximos sempre vazia, ou telas antigas | A imagem está velha: `docker compose up -d --build`. |
+
+## Colocar online num domínio
+
+> ⚠️ **O painel não tem login.** Quem chega nele pode mexer na fila, iniciar a coleta e trocar
+> configurações, e o noVNC dá controle do navegador do coletor. **Nunca publique as portas 8080 e 6080
+> diretamente:** coloque sempre um login na frente, como nas opções abaixo. Esse login é único para
+> todos, sem perfis, então só compartilhe com quem pode operar tudo.
+
+| Sua situação | Caminho |
+|---|---|
+| Servidor com IP público (VPS) e domínio | [A. Caddy](#opção-a-caddy-https-automático-e-senha) |
+| Casa, NAS, operadora com CGNAT, ou prefere não abrir portas | [B. Cloudflare Tunnel](#opção-b-cloudflare-tunnel-sem-abrir-portas) |
+| Só você ou um grupo pequeno, sem domínio | [C. SSH ou Tailscale](#opção-c-sem-dns-público-ssh-ou-tailscale) |
+
+**Preparação comum às opções A e B:**
+
+- **Domínio:** qualquer registrador serve (para `.br`, o [Registro.br](https://registro.br)).
+- **Nomes:** os exemplos usam `lattes.exemplo.com.br` (painel) e `lattes-vnc.exemplo.com.br` (noVNC).
+  Prefira nomes de um nível só: o certificado gratuito da Cloudflare não cobre `vnc.lattes.exemplo.com.br`.
+- **Link do noVNC:** acrescente ao `.env` e aplique com `docker compose up -d` (as aspas são necessárias):
+
+  ```bash
+  NOVNC_URL='https://lattes-vnc.exemplo.com.br/vnc.html?autoconnect=true&resize=scale'
+  ```
+
+- **noVNC é opcional:** se usa 2Captcha ou a prévia e raramente precisa dele, deixe-o fora do domínio e
+  abra por túnel SSH quando precisar ([opção C](#opção-c-sem-dns-público-ssh-ou-tailscale)). É menos uma
+  porta de entrada.
+
+### Opção A: Caddy (HTTPS automático e senha)
+
+O [Caddy](https://caddyserver.com/docs/install) roda na própria máquina, emite o certificado sozinho e
+repassa para as portas locais do app. Requer Caddy 2.8 ou mais novo.
+
+**1. DNS.** No painel do domínio, crie os registros abaixo e espere propagar **antes** de iniciar o Caddy:
+
+| Tipo | Nome | Valor | TTL |
+|---|---|---|---|
+| A | `lattes` | IP público do servidor | 300 |
+| A | `lattes-vnc` | IP público do servidor | 300 |
+
+```bash
+dig +short lattes.exemplo.com.br      # tem de responder o IP do servidor
+```
+
+Se o servidor tem IPv6, crie também registros `AAAA`. Se usa o proxy da Cloudflare (nuvem laranja),
+coloque o SSL em “Full (strict)”; é mais simples começar com “DNS only” (nuvem cinza).
+
+**2. Firewall.** Abra só SSH, 80 e 443. As portas 8080 e 6080 do Compose já escutam apenas em
+`127.0.0.1`.
+
+```bash
+sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
+```
+
+**3. Senha.** Gere o hash; o Caddy não aceita senha em texto puro:
+
+```bash
+caddy hash-password
+```
+
+**4. `/etc/caddy/Caddyfile`:**
+
+```caddyfile
+(login) {
+	basic_auth {
+		admin HASH_GERADO_NO_PASSO_3
+	}
+}
+
+lattes.exemplo.com.br {
+	import login
+	reverse_proxy localhost:8080
+}
+
+lattes-vnc.exemplo.com.br {
+	import login
+	reverse_proxy localhost:6080
+}
+```
+
+```bash
+sudo systemctl reload caddy
+```
+
+O WebSocket do noVNC passa pelo `reverse_proxy` sem configuração extra.
+
+**IP de casa que muda?** Use um DNS dinâmico (DuckDNS ou o do seu provedor) e encaminhe as portas 80 e
+443 do roteador para a máquina. Antes, veja se a operadora usa CGNAT: compare o IP WAN do roteador com
+`curl ifconfig.me`. Se forem diferentes, ou se o WAN estiver em `100.64.x.x`, não há como receber
+conexões de fora: use a opção B.
+
+### Opção B: Cloudflare Tunnel (sem abrir portas)
+
+A máquina abre uma conexão de saída para a Cloudflare, então funciona atrás de CGNAT e não expõe seu
+IP. O domínio precisa usar os nameservers da Cloudflare, e o plano gratuito atende esse uso.
+
+**1. Crie o login primeiro.** Sem isso, o endereço fica aberto para qualquer pessoa. No
+[painel Zero Trust](https://one.dash.cloudflare.com): *Access controls → Applications → Create new
+application → Self-hosted and private*. Crie uma aplicação para cada nome, com uma política que permita
+só os e-mails autorizados. O acesso por código enviado ao e-mail (one-time PIN) não exige configurar
+provedor de login.
+
+**2. Crie o túnel.** Com o
+[`cloudflared`](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)
+instalado:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create lattes                 # mostra o UUID e cria o arquivo de credenciais
+cloudflared tunnel route dns lattes lattes.exemplo.com.br
+cloudflared tunnel route dns lattes lattes-vnc.exemplo.com.br
+```
+
+Os registros DNS são criados por esses comandos.
+
+**3. `~/.cloudflared/config.yml`:**
+
+```yaml
+tunnel: <UUID>
+credentials-file: /home/<usuario>/.cloudflared/<UUID>.json
+
+ingress:
+  - hostname: lattes.exemplo.com.br
+    service: http://localhost:8080
+  - hostname: lattes-vnc.exemplo.com.br
+    service: http://localhost:6080
+  - service: http_status:404      # obrigatório: regra final sem hostname
+```
+
+No ZimaOS ou com o `cloudflared` em outra máquina da rede, troque `localhost` pelo IP do NAS. No
+ZimaOS, defina também `NOVNC_URL` em `environment` do compose.
+
+**4. Teste e deixe como serviço:**
+
+```bash
+cloudflared tunnel ingress validate
+cloudflared tunnel run lattes                    # teste; Ctrl+C para sair
+sudo cloudflared --config /home/<usuario>/.cloudflared/config.yml service install
+sudo systemctl start cloudflared
+```
+
+### Opção C: sem DNS público (SSH ou Tailscale)
+
+**Túnel SSH:** o mais simples para um servidor remoto. Não publica nada, e os links de `localhost`
+funcionam enquanto a conexão estiver aberta:
+
+```bash
+ssh -L 8080:localhost:8080 -L 6080:localhost:6080 usuario@servidor
+```
+
+**[Tailscale](https://tailscale.com/kb/1242/tailscale-serve):** dá HTTPS e um nome
+`<maquina>.<sua-rede>.ts.net`, visível só para os aparelhos da sua rede Tailscale:
+
+```bash
+sudo tailscale serve --bg localhost:8080
+sudo tailscale serve --bg --https=8443 localhost:6080
+```
+
+Nesse caso, use `NOVNC_URL='https://<maquina>.<sua-rede>.ts.net:8443/vnc.html?autoconnect=true&resize=scale'`.
+A documentação do Tailscale não menciona WebSocket: se o noVNC não conectar, use o túnel SSH para ele.
+
+### Antes de divulgar o endereço
+
+- [ ] Numa aba anônima, o endereço pede login antes de mostrar qualquer coisa.
+- [ ] A API também está protegida: `curl -I https://lattes.exemplo.com.br/api/coletor` responde `401`
+      (Caddy) ou redireciona para o login (Cloudflare), nunca `200`.
+- [ ] De fora da rede, as portas 8080 e 6080 não respondem (`nmap -Pn -p 8080,6080 <ip-publico>`).
+- [ ] Na aba Coleta, o botão noVNC abre o domínio certo, e a tela conecta.
+- [ ] `VNC_PASSWORD` está definida, e o `.env` não foi para o git.
+- [ ] O backup está ligado e copia para fora da máquina (`BACKUP_S3_BUCKET`).
+- [ ] Você decidiu o que expor e como atender pedidos de remoção (LGPD): o painel mostra nomes,
+      vínculos e produção de pessoas reais. Ver [Banco](#banco).
+
+> As configurações de Caddy, Cloudflare e Tailscale seguem a documentação oficial (conferida em
+> 2026-11), mas ainda não foram executadas com este projeto. Se algo divergir, vale o que diz a
+> documentação de cada ferramenta.
 
 ## Captcha: leia isto
 
@@ -120,15 +394,17 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   (`(Tradução/Artigo)` → `traducao`). Coautor com link para o próprio Lattes já grava o ID na
   autoria, então a aresta de coautoria existe antes de coletar o CV dele. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML
   e HTML do mesmo ID, vale o XML.
-- **Coleta em cadeia:** todo link `lattes.cnpq.br/<id>` de outra pessoa na página (orientador,
-  orientados, coautores) entra na fila com origem `cv` e o nome como dica; quem já estava na fila
-  (ex.: veio de uma lista de IDs) não duplica, só ganha o nome se não tinha.
+- **Coleta da rede:** os links `lattes.cnpq.br/<id>` de outra pessoa na página (orientador,
+  orientados, coautores) só entram na fila quando o CV foi pedido com rede (“topo + rede”), até o
+  nível pedido, contado a partir da lista enviada; CVs de fora da rede não puxam vizinhos. Entram
+  com origem `cv` e o nome como dica; quem já estava na fila não duplica. Quem é citado e ainda
+  não foi coletado aparece na aba Próximos.
 - Os XMLs e HTMLs crus ficam em `data/app/xml/` e `data/app/html/`, então **trocar um parser não
   exige baixar de novo**: Configurações → “Reprocessar todos” repassa todo XML/HTML em disco,
   inclusive arquivos soltos em `data/app/html/` (ex.: salvos à mão do navegador).
 - Amostras reais de HTML em `data/amostras/<id>.html` (fora do git) entram num teste que exige
   parse sem erro, sem seção desconhecida e toda obra com autor e ano.
-- **Pegar amostras para um parser novo:** no Painel, card Parsers → “Elementos sem parser”, clique
+- **Pegar amostras para um parser novo:** no Painel, card “Elementos sem parser”, clique
   no elemento: lista os CVs que o têm, com “baixar” (o XML/HTML cru) e “Baixar todos (.zip)”. Os
   arquivos vão para `data/amostras/` e viram teste.
 
@@ -218,3 +494,12 @@ no repositório. Ao receber o primeiro XML real, rode-o pelo parser e confira o 
 - O grafo parte do filtro e se expande por coautoria/orientação (até 3 níveis); quem ainda não foi coletado entra como nó “não coletado”, sem perfil.
 - `ORIENTACOES-EM-ANDAMENTO`, bancas, eventos e projetos (`DADOS-COMPLEMENTARES`) ainda não são extraídos.
 - O backup em nuvem faz tarball completo dos XMLs a cada rodada (não incremental).
+
+## Créditos
+
+Este projeto é baseado no **[scriptLattes](https://github.com/jpmenachalco/scriptLattes)**, criado por
+Jesús P. Mena-Chalco e Roberto M. Cesar Jr., que abriu o caminho de extrair e organizar a produção
+acadêmica da Plataforma Lattes. A ideia e o fluxo da prévia da busca vêm de lá. O Lattes Devour é uma
+implementação própria em TypeScript, que guarda os dados num PostgreSQL e os serve num painel, em vez de
+gerar um site estático. Se o seu objetivo é publicar relatórios de um grupo de pesquisa, vale conhecer o
+projeto original.
