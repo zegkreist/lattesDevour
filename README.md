@@ -12,11 +12,12 @@ e Roberto M. Cesar Jr., mas guardando num banco em vez de gerar um site estátic
  navegador ──► app (Node/TS)  ── API + front + coletor (Chromium) + parse + backup
                  │   └── noVNC :6080  (o navegador do coletor, para resolver captcha)
                  └──► db (Postgres 17)
-   host:  ./data/pg  (banco)   ./data/app  (xml/, html/, import/, backups/, exports/, browser-profile/)
+   host:  ./data/pg  (banco)   ./data/app  (xml/, html/, backups/, exports/, browser-profile/)
 ```
 
 **Neste guia:** [Instalação](#instalação) · [Primeiro uso](#primeiro-uso) ·
 [Atualizar e mover](#atualizar-parar-e-mover) · [Problemas comuns](#problemas-comuns) ·
+[Levar a base para outro Lattes Devour](#levar-a-base-para-outro-lattes-devour) ·
 [Colocar online num domínio](#colocar-online-num-domínio)
 
 ## Instalação
@@ -133,7 +134,8 @@ sudo tar czpf lattes.tgz data .env           # no servidor antigo
 sudo tar xzpf lattes.tgz                     # no novo, dentro da pasta do projeto
 ```
 
-Sobre cópias periódicas, veja [Backup](#backup).
+Sobre cópias periódicas, veja [Backup](#backup). Para passar os dados a outra pessoa, veja
+[Levar a base para outro Lattes Devour](#levar-a-base-para-outro-lattes-devour).
 
 ## Problemas comuns
 
@@ -351,10 +353,6 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
   mostra o intervalo resultante. Os CVs são espaçados de início a início (3600/N s, ±20%, mínimo de
   2 s entre um e outro) e uma janela deslizante de 1 h serve de trava. Custo de referência do
   2Captcha: alguns dólares por mil captchas, ou seja, uns US$ 4–5/dia a 60/h rodando 24 h.
-- Para volume (o Brasil inteiro) o caminho é o **Extrator Lattes do CNPq** (web service para
-  instituições de ensino/pesquisa; pedido por `atendimento@cnpq.br`, assunto “Solicitação de
-  acesso ao Lattes Extrator”). O que ele entregar (`.xml` ou `.zip`) é só soltar em
-  `data/app/import/`: entra no parser de XML, sem captcha.
 - O CNPq publica a lista de IDs de todos os currículos
   (<https://memoria.cnpq.br/web/portal-lattes/extracoes-de-dados>). Cole na aba Coleta → “Adicionar CVs” com destino “fim da fila”.
 
@@ -368,7 +366,7 @@ o currículo em **HTML**. A busca por nome (`busca.do`) usa reCAPTCHA v3 invisí
 | CVs específicos | aba Coleta → “Adicionar CVs” (destino “topo da fila” ou “topo + rede”): um ou vários links (`lattes.cnpq.br/<ID>`, `cv?id=`) ou IDs de 16 dígitos; vão para o **topo da fila** na ordem colada e o card acompanha cada um até estar no banco. **“+ rede”** (1 ou 2 níveis): quem aparece no CV com link do Lattes (orientador, orientados, coautores) vem logo depois; CV já coletado não é baixado de novo, só reprocessado para priorizar a rede. Link com ID interno (`visualizacv.do?id=K…`) não serve | prioridade: pedido > rede > resto |
 | Lista de IDs | aba Coleta → “Adicionar CVs” com destino “fim da fila” (aceita URLs `lattes.cnpq.br/<id>`, CSV, lista do CNPq) | o que você tiver |
 | Próximos da rede | aba Próximos → filtro (região, instituição, tema, nome) escolhe a rede de quem já foi coletado; lista quem **ainda não foi coletado** e é coautor/orientado dela, por quantos da rede o citam; marque e mande para o topo (com rede) ou fim da fila | quem tem Lattes linkado nos CVs já coletados |
-| XMLs do Extrator | soltar em `data/app/import/` | o que o CNPq liberar |
+| Base de outro usuário | Configurações → “Importar base”, com o `.zip` que a pessoa baixou (veja [Levar a base para outro Lattes Devour](#levar-a-base-para-outro-lattes-devour)) | o que a outra base tiver |
 
 A busca nativa do Lattes (por nome/instituição) também exige captcha e não foi automatizada.
 
@@ -387,9 +385,9 @@ O XML segue o XSD oficial (`docs/lattes.xsd`, do CNPq). A estrutura:
   `ParsedCV`, com os mesmos tipos de obra e a mesma chave (DOI ou `tipo|título|ano`), para a obra de
   dois coautores — um vindo do XML e outro do HTML — virar uma só. Lê identificação, endereço
   profissional, formação, atuação, áreas, produções (artigos com DOI/ISSN/periódico do `cvuri`) e
-  orientações concluídas; os blocos “Pós-doutorado” e “Livre-docência” entram na formação. Participação
+  orientações concluídas; os blocos “Pós-doutorado” e “Livre-docência”, separados ou juntos num título só, entram na formação. Participação
   em eventos, orientações em andamento, bancas, projetos (pesquisa, extensão, ensino,
-  desenvolvimento), corpo editorial, revisão e comitês de assessoramento ficam de fora, como no XML. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
+  desenvolvimento), corpo editorial, revisão e comitês de assessoramento ficam de fora, como no XML. “Licença Maternidade, Paternidade e Adoção” também não é lida, por ser dado pessoal e não acadêmico. Listas que misturam tipos (“Outras produções bibliográficas”, “Demais tipos de produção
   técnica”, “Entrevistas…”) usam o parêntese de cada item, que é o nome do elemento no XML
   (`(Tradução/Artigo)` → `traducao`). Coautor com link para o próprio Lattes já grava o ID na
   autoria, então a aresta de coautoria existe antes de coletar o CV dele. Bloco `h1` desconhecido vai para “Elementos sem parser” como `html:<bloco>`. Havendo XML
@@ -473,6 +471,40 @@ Listas (`text[]`) viram listas; `jsonb` vira texto JSON. Ficam de fora `settings
 do 2Captcha), `schema_migrations` e as colunas `tsv` (índice de busca). Quem gera é o DuckDB, que
 lê o Postgres pela extensão `postgres`, baixada uma vez para `data/app/duckdb-ext/` (precisa de
 internet na primeira exportação).
+
+## Levar a base para outro Lattes Devour
+
+Para passar a base a outra pessoa, ou juntar duas bases, sem coletar tudo de novo:
+
+1. **Quem envia:** Configurações → Cópia em Parquet → **Exportar agora**, depois **Baixar .zip**.
+2. **Quem recebe:** Configurações → Importar base → escolha o `.zip` e clique em **Importar**. O coletor
+   pode continuar rodando.
+
+O `.zip` contém só os `.parquet` do banco, e o import lê esses arquivos. Repetir o import não muda nada:
+
+| Caso | O que acontece |
+|---|---|
+| CV que só existe no `.zip` | Entra com obras, orientações e instituição |
+| CV que existe nas duas bases | Fica o **atualizado mais recentemente no Lattes**. Com a mesma data, o **maior** (mais obras e orientações). Persistindo o empate, o daqui. A versão que perde sai inteira |
+| CV sendo baixado ou parseado aqui | Fica o daqui, porque será a versão mais nova |
+| Obra declarada por CVs das duas bases | Vira uma obra só, com as informações de todos os CVs, como se tivessem sido coletados na mesma base |
+| Fila pendente da outra base | Entra como pendente, e só é baixada quando alguém iniciar o coletor (remova em Coleta → Fila → “Limpar pendentes”) |
+| Base vazia | Fica idêntica à de origem |
+
+Para **substituir** a base em vez de juntar, use “Apagar todo o banco” antes de importar.
+
+**Limites:**
+
+- **Os arquivos crus não vão junto.** “Reprocessar todos” não alcança um CV importado, mesmo que um
+  arquivo antigo dele tenha ficado em disco, e uma melhoria futura no parser só chega a ele se o CV for
+  coletado de novo. Na lista de amostras, ele aparece
+  como “sem arquivo”. Para levar **tudo** para outra máquina sua, com os arquivos crus, copie `data/`
+  e `.env` ([Mudar de servidor](#atualizar-parar-e-mover)).
+- **Tamanho:** o `.zip` pode ter até 1 GB. Atrás do plano gratuito da Cloudflare, cada envio é limitado
+  a 100 MB; acima disso, importe por um [túnel SSH](#opção-c-sem-dns-público-ssh-ou-tailscale).
+- **Internet:** na primeira exportação ou importação, o app baixa a extensão `postgres` do DuckDB.
+- **Dados pessoais:** o `.zip` traz os dados de pessoas reais e não tem senha. Envie por um canal
+  seguro e veja [Banco](#banco).
 
 ## Desenvolvimento
 

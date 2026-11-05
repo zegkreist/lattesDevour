@@ -82,7 +82,12 @@ main { flex: 1; overflow: auto; padding: 24px 40px 48px; }
 /* Grades */
 .grid { display: grid; gap: 24px; min-width: 0; }
 .g4 { gap: 16px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-.g2 { align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+.g2 > .card { display: flex; flex-direction: column; }
+.g2 > .card > .card-body { flex: 1; }
+/* Todas as linhas com a altura da maior e os botões alinhados na base do card. */
+.uniforme { grid-auto-rows: 1fr; }
+.uniforme > .card > .card-body { display: flex; flex-direction: column; justify-content: flex-end; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .entre { justify-content: space-between; }
 
@@ -141,6 +146,7 @@ textarea { display: block; width: 100%; min-height: 76px; padding: 8px 12px; fon
 input::placeholder, textarea::placeholder { color: hsl(var(--muted-foreground)); }
 input:hover, select:hover, textarea:hover { border-color: hsl(var(--primary) / .5); }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: hsl(var(--primary)); box-shadow: 0 0 0 2px hsl(var(--primary) / .2); }
+input[type='file'] { height: auto; padding: 5px 8px; min-width: 0; }
 input[type='checkbox'] { width: 16px; height: 16px; padding: 0; vertical-align: middle; accent-color: hsl(var(--primary)); box-shadow: none; }
 
 .campos { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); align-items: end; }

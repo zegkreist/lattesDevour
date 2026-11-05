@@ -11,7 +11,6 @@ import { chave2Captcha, Erro2Captcha, resolverRecaptcha } from './twocaptcha.js'
 // token não abrir o CV, cai para o modo humano. Sem chave, abre o currículo num
 // Chromium visível (Xvfb + noVNC), marca 'aguardando_captcha' e espera uma pessoa resolver.
 // Em qualquer modo o ritmo é de 60 a 180 CVs por hora, espaçados, para não pesar no CNPq.
-// Para volume, o caminho continua sendo o Extrator Lattes: zip/XML em data/import.
 
 export interface CollectorState {
   rodando: boolean;

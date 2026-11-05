@@ -43,6 +43,10 @@ export function tagsDaObra(o: ParsedObra, ctx: Contexto): string[] {
   ]).filter((t) => t.length > 3 && t.length < 120);
 }
 
-export function textoBusca(o: ParsedObra): string {
+export function textoBusca(o: Pick<ParsedObra, 'titulo' | 'veiculo' | 'palavrasChave'>): string {
   return norm([o.titulo, o.veiculo ?? '', o.palavrasChave.join(' ')].join(' '));
+}
+
+export function textoPesquisador(nome: string, nomesCitacao: string[], instituicao: string | null | undefined, areas: string[], grandesAreas: string[]): string {
+  return norm([nome, nomesCitacao.join(' '), instituicao ?? '', areas.join(' '), grandesAreas.join(' ')].join(' '));
 }

@@ -1,4 +1,4 @@
-import { DatabaseBackup, FileDown, FolderSync, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { DatabaseBackup, Download, FileDown, RefreshCw, Save, Trash2, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { api, usePoll } from '../api';
 import { Card, fmt, when } from './ui';
@@ -13,6 +13,8 @@ export function Config() {
   const [apagando, setApagando] = useState(false);
   const [senha, setSenha] = useState('');
   const [erroApagar, setErroApagar] = useState('');
+  const [zip, setZip] = useState<File | null>(null);
+  const [campoZip, setCampoZip] = useState(0); // trocar a key limpa o campo de arquivo depois de importar
   const apagar = async () => {
     setBusy(true);
     setErroApagar('');
@@ -42,10 +44,20 @@ export function Config() {
       reloadC();
       return valor ? `salva · saldo US$ ${r.saldo.toFixed(2)}` : 'removida';
     });
+  const importar = () =>
+    rodar('import', async () => {
+      const r = await fetch('/api/importar', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: zip });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.erro ?? (r.status === 413 ? 'arquivo maior que o limite de 1 GB' : `HTTP ${r.status}`));
+      setZip(null);
+      setCampoZip((n) => n + 1);
+      reload();
+      return `${fmt(j.cvsNovos)} CV(s) novos · ${fmt(j.cvsAtualizados)} atualizados · ${fmt(j.cvsMantidos)} mantidos · ${fmt(j.obrasNovas)} obras novas · ${fmt(j.naFila)} pendentes na fila`;
+    });
   const ultimoBackup = s?.backups?.[0];
   const linhasEx = (ex?.arquivos ?? []).reduce((n: number, a: any) => n + a.bytes, 0);
   return (
-    <div className="grid g2">
+    <div className="grid g2 uniforme">
       <Card titulo="2Captcha" desc={k ? <>Chave <code>••••{k.final}</code> ({k.origem === 'painel' ? 'salva aqui' : 'do .env'}). Usada no caminho “link direto”.</> : 'Sem chave: no caminho “link direto”, o captcha fica com uma pessoa no noVNC.'}>
         <div className="row">
           <input type="password" autoComplete="off" aria-label="Chave da API do 2Captcha" placeholder={k ? 'Trocar chave' : 'Chave da API'} value={chave} onChange={(e) => setChave(e.target.value)} />
@@ -54,9 +66,10 @@ export function Config() {
           {msg.captcha && <span className="muted">{msg.captcha}</span>}
         </div>
       </Card>
-      <Card titulo="Importar XML (Extrator do CNPq)" desc={<><code>.xml</code>/<code>.zip</code> em <code>data/import</code> entram sozinhos a cada 30 s.</>}>
+      <Card titulo="Importar base" desc="Recebe o .zip baixado em “Cópia em Parquet” de outro Lattes Devour. CV nas duas bases fica na versão mais recente; se a data empatar, na maior. Os arquivos crus não vêm junto, então “Reprocessar todos” não alcança o CV importado.">
         <div className="row">
-          <button className="b sec" onClick={() => rodar('import', async () => { const r = await api('/importar-pasta', { body: {} }); return `${r.importados} importado(s)${r.falhas.length ? ' · falhas: ' + r.falhas.join(' | ') : ''}`; })}><FolderSync size={14} /> Varrer agora</button>
+          <input key={campoZip} type="file" accept=".zip,application/zip" aria-label="Arquivo .zip da exportação" disabled={busy} onChange={(e) => setZip(e.target.files?.[0] ?? null)} />
+          <button className="b" disabled={!zip || busy} onClick={importar}><Upload size={14} /> Importar</button>
           {msg.import && <span className="muted">{msg.import}</span>}
         </div>
       </Card>
@@ -78,6 +91,7 @@ export function Config() {
       </>}>
         <div className="row">
           <button className="b sec" disabled={busy} onClick={() => rodar('ex', async () => { const r = await api('/exportar', { body: {} }); reloadEx(); return `${r.tabelas.length} tabelas, ${fmt(r.tabelas.reduce((n: number, t: any) => n + t.linhas, 0))} linhas`; })}><FileDown size={14} /> Exportar agora</button>
+          {ex?.arquivos.length > 0 && <a className="b sec" href="/api/exportar/zip" download style={{ textDecoration: 'none' }}><Download size={14} /> Baixar .zip</a>}
           {msg.ex && <span className="muted">{msg.ex}</span>}
         </div>
         {ex?.arquivos.length > 0 && (

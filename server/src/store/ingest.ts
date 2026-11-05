@@ -4,7 +4,7 @@ import { currentParserVersion } from '../parsers/index.js';
 import type { ParsedCV } from '../parsers/types.js';
 import { escolherUf, regiaoDaUf, ufPeloNome } from '../util/regions.js';
 import { norm, uniq } from '../util/text.js';
-import { contextoDe, tagsDaObra, tagsDoPesquisador, textoBusca } from './tags.js';
+import { contextoDe, tagsDaObra, tagsDoPesquisador, textoBusca, textoPesquisador } from './tags.js';
 
 export interface IngestResult {
   obras: number;
@@ -57,7 +57,7 @@ interface AutorFonte { ordem: number; nome: string; nomeCitacao: string | null; 
  * - autoria: a lista da melhor fonte (XML; senão a mais completa), com o ID Lattes que qualquer
  *   fonte conheça para aquele nome, e o dono de cada CV-fonte resolvido pelo próprio nome.
  */
-async function recomputarObras(c: pg.PoolClient, ids: string[]): Promise<void> {
+export async function recomputarObras(c: pg.PoolClient, ids: string[]): Promise<void> {
   if (!ids.length) return;
   const uniao = (col: string) =>
     `COALESCE((SELECT array_agg(DISTINCT t ORDER BY t) FROM obra_fonte f, unnest(f.${col}) t WHERE f.obra_id = o.id), '{}')`;
@@ -148,7 +148,7 @@ async function ingestTx(
     if (r.rows[0].uf && !r.rows[0].uf_antes) {
       await c.query(
         `UPDATE fila SET status = CASE WHEN xml_path IS NOT NULL THEN 'baixado' ELSE 'html' END, atualizado_em = now()
-         WHERE lattes_id <> $2 AND status = 'parseado'
+         WHERE lattes_id <> $2 AND status = 'parseado' AND (xml_path IS NOT NULL OR html_path IS NOT NULL)
            AND lattes_id IN (SELECT id FROM pesquisador WHERE instituicao_id = $1 AND uf IS NULL)`,
         [instId, cv.lattesId],
       );
@@ -173,9 +173,7 @@ async function ingestTx(
     }
   }
 
-  const tsvPesq = norm(
-    [cv.nome, cv.nomesCitacao.join(' '), cv.instituicao?.nome ?? '', cv.areas.join(' '), cv.grandesAreas.join(' ')].join(' '),
-  );
+  const tsvPesq = textoPesquisador(cv.nome, cv.nomesCitacao, cv.instituicao?.nome, cv.areas, cv.grandesAreas);
 
   await c.query(
     `INSERT INTO pesquisador (id, nome, nome_norm, nomes_citacao, orcid, resumo, instituicao_id, uf, cidade, regiao,
