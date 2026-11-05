@@ -5,7 +5,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { rotas } from './api/routes.js';
 import { agendarBackup } from './backup.js';
-import { importarPasta, parsePending } from './collector/pipeline.js';
+import { parsePending } from './collector/pipeline.js';
 import { config, paths } from './config.js';
 import { migrate, pool } from './db.js';
 import './parsers/index.js';
@@ -13,7 +13,7 @@ import './parsers/index.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  for (const d of [paths.xml(), paths.imports(), paths.backups()]) fs.mkdirSync(d, { recursive: true });
+  for (const d of [paths.xml(), paths.backups()]) fs.mkdirSync(d, { recursive: true });
 
   // O DB sobe em paralelo no compose; espera até aceitar conexão.
   for (let i = 0; ; i++) {
@@ -34,9 +34,8 @@ async function main() {
   }
   await app.listen({ port: config.port, host: '0.0.0.0' });
 
-  // Parse contínuo do que foi baixado + varredura da pasta de import (Extrator do CNPq).
+  // Parse contínuo do que foi baixado.
   setInterval(() => void parsePending().catch((e) => console.error('parse:', e)), 2000).unref();
-  setInterval(() => void importarPasta().catch((e) => console.error('import:', e)), 30_000).unref();
   agendarBackup();
 }
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DuckDBInstance } from '@duckdb/node-api';
+import { zipSync } from 'fflate';
 import { config, paths } from './config.js';
 import { pool } from './db.js';
 
@@ -11,23 +12,45 @@ import { pool } from './db.js';
 // Fica de fora o que é segredo ou interno: settings guarda a chave do 2Captcha.
 export const FORA = new Set(['settings', 'schema_migrations']);
 
-const sql = (s: string) => `'${s.replace(/'/g, "''")}'`;
-const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
+export const sql = (s: string) => `'${s.replace(/'/g, "''")}'`;
+export const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
+
+/** DuckDB em memória com o Postgres anexado como `pg`. A extensão é baixada uma vez para data/duckdb-ext. */
+export async function duckdbComPostgres(modo: 'leitura' | 'escrita') {
+  fs.mkdirSync(paths.duckdbExt(), { recursive: true });
+  const db = await DuckDBInstance.create(':memory:');
+  const con = await db.connect();
+  const fechar = () => { con.closeSync(); db.closeSync(); };
+  try {
+    await con.run(`SET extension_directory = ${sql(paths.duckdbExt())}`);
+    await con.run('INSTALL postgres');
+    await con.run('LOAD postgres');
+    await con.run(`ATTACH ${sql(config.databaseUrl)} AS pg (TYPE postgres${modo === 'leitura' ? ', READ_ONLY' : ''})`);
+  } catch (e) {
+    fechar();
+    throw e;
+  }
+  return { con, fechar };
+}
+
+/** A exportação atual num .zip, para levar a outro Lattes Devour. O Parquet já vem comprimido: só empacota. */
+export function zipDaExportacao(dir = paths.exports()): Uint8Array | null {
+  const nomes = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.parquet')) : [];
+  if (!nomes.length) return null;
+  return zipSync(Object.fromEntries(nomes.map((f) => [f, [fs.readFileSync(path.join(dir, f)), { level: 0 }]])));
+}
 
 let exportando = false;
 
 export async function exportarParquet(dir = paths.exports()): Promise<{ dir: string; tabelas: { tabela: string; linhas: number; bytes: number }[] }> {
   if (exportando) throw new Error('exportação já em andamento');
   exportando = true;
-  fs.mkdirSync(dir, { recursive: true });
-  fs.mkdirSync(paths.duckdbExt(), { recursive: true });
-  const db = await DuckDBInstance.create(':memory:');
-  const con = await db.connect();
+  let fechar = () => {};
   try {
-    await con.run(`SET extension_directory = ${sql(paths.duckdbExt())}`);
-    await con.run('INSTALL postgres');
-    await con.run('LOAD postgres');
-    await con.run(`ATTACH ${sql(config.databaseUrl)} AS pg (TYPE postgres, READ_ONLY)`);
+    fs.mkdirSync(dir, { recursive: true });
+    const duck = await duckdbComPostgres('leitura');
+    const { con } = duck;
+    fechar = duck.fechar;
 
     // tsvector é só o índice de busca (derivado) e o DuckDB não o lê: fica de fora.
     const { rows } = await pool.query<{ tabela: string; colunas: string[] }>(
@@ -49,8 +72,7 @@ export async function exportarParquet(dir = paths.exports()): Promise<{ dir: str
     }
     return { dir, tabelas };
   } finally {
-    con.closeSync();
-    db.closeSync();
+    fechar();
     exportando = false;
   }
 }

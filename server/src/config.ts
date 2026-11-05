@@ -39,7 +39,6 @@ export const paths = {
   html: () => path.join(config.dataDir, 'html'),
   exports: () => path.join(config.dataDir, 'exports'),
   duckdbExt: () => path.join(config.dataDir, 'duckdb-ext'),
-  imports: () => path.join(config.dataDir, 'import'),
   backups: () => path.join(config.dataDir, 'backups'),
   browserProfile: () => path.join(config.dataDir, 'browser-profile'),
 };

@@ -6,8 +6,7 @@ import { config, paths } from '../config.js';
 import { enfileirarVinculados } from '../discovery/ids.js';
 import { parseCV, parseHtmlCV, HTML_PARSER } from '../parsers/index.js';
 import { ingest } from '../store/ingest.js';
-import { unzipSync } from 'fflate';
-import { decodeXml, extractXml, isZip } from '../util/xmlfile.js';
+import { decodeXml } from '../util/xmlfile.js';
 
 export function xmlPathFor(id: string): string {
   return path.join(paths.xml(), `${id}.xml`);
@@ -30,23 +29,9 @@ export async function saveHtml(id: string, html: string, caminho: 'cv' | 'previa
   return file;
 }
 
-/** Guarda o XML cru (no encoding original) em disco e marca a fila como baixado. */
-export async function saveXml(id: string, bytes: Uint8Array, origem = 'manual'): Promise<string> {
-  fs.mkdirSync(paths.xml(), { recursive: true });
-  const file = xmlPathFor(id);
-  fs.writeFileSync(file + '.tmp', bytes);
-  fs.renameSync(file + '.tmp', file);
-  await pool.query(
-    `INSERT INTO fila (lattes_id, status, origem, xml_path) VALUES ($1,'baixado',$2,$3)
-     ON CONFLICT (lattes_id) DO UPDATE SET status='baixado', xml_path=$3, ultimo_erro=NULL, atualizado_em=now()`,
-    [id, origem, file],
-  );
-  return file;
-}
-
 export async function parseOne(id: string): Promise<{ ok: boolean; erro?: string }> {
   try {
-    // XML (Extrator do CNPq) é mais completo; sem ele, o HTML da página do CV.
+    // XML é mais completo; sem ele, o HTML da página do CV.
     const xml = xmlPathFor(id);
     const temXml = fs.existsSync(xml);
     const buf = fs.readFileSync(temXml ? xml : htmlPathFor(id));
@@ -56,7 +41,8 @@ export async function parseOne(id: string): Promise<{ ok: boolean; erro?: string
       : { cv: parseHtmlCV(buf.toString('utf8')), ...HTML_PARSER };
     if (cv.lattesId !== id) throw new Error(`CV é do ID ${cv.lattesId}, esperado ${id}`);
     await ingest(cv, { parser, versao, xmlSha256: sha });
-    // Rede pedida no painel: propaga uma vez e zera (reprocessar depois não repropaga).
+    // Rede pedida no painel: propaga uma vez e zera (reprocessar depois não repropaga). Sem rede, os
+    // citados não entram na fila.
     const rede = Number((await pool.query(`UPDATE fila f SET rede = 0 FROM (SELECT rede FROM fila WHERE lattes_id = $1) a
       WHERE f.lattes_id = $1 RETURNING a.rede`, [id])).rows[0]?.rede ?? 0);
     if (cv.vinculados?.length) await enfileirarVinculados(cv.vinculados, rede);
@@ -95,20 +81,22 @@ export async function parsePending(limit = 200): Promise<number> {
  * salvo à mão do navegador). Cada CV troca só o que ele mesmo declarou (ver store/ingest.ts):
  * nada é apagado em massa e o painel segue completo durante o reprocesso. É por isso que
  * guardamos o arquivo cru. CV que o coletor está baixando agora é processado quando terminar.
+ * CV importado (parseado, sem caminho) fica de fora: um arquivo em disco seria a versão que perdeu.
  */
 export async function reprocessar(): Promise<number> {
   const emDisco = (dir: string, ext: string) =>
     fs.existsSync(dir) ? fs.readdirSync(dir).flatMap((f) => new RegExp(`^(\\d{16})\\.${ext}$`).exec(f)?.[1] ?? []) : [];
+  const naoImportado = `WHERE NOT (fila.origem = 'importado' AND fila.status = 'parseado' AND fila.xml_path IS NULL AND fila.html_path IS NULL)`;
   await pool.query(
     `INSERT INTO fila (lattes_id, status, origem, xml_path)
      SELECT x, 'baixado', 'import', $2 || '/' || x || '.xml' FROM unnest($1::text[]) x
-     ON CONFLICT (lattes_id) DO UPDATE SET xml_path = EXCLUDED.xml_path`,
+     ON CONFLICT (lattes_id) DO UPDATE SET xml_path = EXCLUDED.xml_path ${naoImportado}`,
     [emDisco(paths.xml(), 'xml'), paths.xml()],
   );
   await pool.query(
     `INSERT INTO fila (lattes_id, status, origem, html_path)
      SELECT x, 'html', 'import', $2 || '/' || x || '.html' FROM unnest($1::text[]) x
-     ON CONFLICT (lattes_id) DO UPDATE SET html_path = EXCLUDED.html_path`,
+     ON CONFLICT (lattes_id) DO UPDATE SET html_path = EXCLUDED.html_path ${naoImportado}`,
     [emDisco(paths.html(), 'html'), paths.html()],
   );
   const r = await pool.query(
@@ -117,39 +105,3 @@ export async function reprocessar(): Promise<number> {
   );
   return r.rowCount ?? 0;
 }
-
-const ID_RE = /NUMERO-IDENTIFICADOR="(\d{16})"/;
-
-/** Varre data/import: .xml ou .zip (um ou vários XMLs) -> data/xml + fila. Formato do Extrator do CNPq. */
-export async function importarPasta(): Promise<{ importados: number; falhas: string[] }> {
-  const dir = paths.imports();
-  fs.mkdirSync(path.join(dir, 'processados'), { recursive: true });
-  let importados = 0;
-  const falhas: string[] = [];
-  for (const f of fs.readdirSync(dir)) {
-    const full = path.join(dir, f);
-    if (!fs.statSync(full).isFile() || !/\.(xml|zip)$/i.test(f)) continue;
-    try {
-      const raw = fs.readFileSync(full);
-      for (const xml of extraiTodos(raw)) {
-        const id = ID_RE.exec(Buffer.from(xml.subarray(0, 4096)).toString('latin1'))?.[1];
-        if (!id) throw new Error('XML sem NUMERO-IDENTIFICADOR');
-        await saveXml(id, xml, 'import');
-        importados++;
-      }
-      fs.renameSync(full, path.join(dir, 'processados', `${Date.now()}-${f}`));
-    } catch (e) {
-      falhas.push(`${f}: ${e instanceof Error ? e.message : e}`);
-    }
-  }
-  return { importados, falhas };
-}
-
-function extraiTodos(buf: Uint8Array): Uint8Array[] {
-  if (!isZip(buf)) return [buf];
-  const files = unzipSync(buf);
-  const xmls = Object.entries(files).filter(([n]) => n.toLowerCase().endsWith('.xml')).map(([, b]) => b);
-  if (!xmls.length) throw new Error('zip sem .xml');
-  return xmls;
-}
-export { extractXml };

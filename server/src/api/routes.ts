@@ -5,11 +5,12 @@ import { zipSync } from 'fflate';
 import { fazerBackup } from '../backup.js';
 import { config, paths } from '../config.js';
 import * as coletor from '../collector/collector.js';
-import { htmlPathFor, importarPasta, reprocessar, xmlPathFor } from '../collector/pipeline.js';
+import { htmlPathFor, reprocessar, xmlPathFor } from '../collector/pipeline.js';
 import { chave2Captcha, saldo } from '../collector/twocaptcha.js';
 import { pool, setSetting } from '../db.js';
 import { enfileirar, extrairIds, PRIORIDADE } from '../discovery/ids.js';
-import { exportarParquet } from '../exportar.js';
+import { exportarParquet, zipDaExportacao } from '../exportar.js';
+import { importarBase, LIMITE_ZIP } from '../importar.js';
 import { limparBanco, senhaConfere } from '../limpar.js';
 import { currentParserVersion, listParsers } from '../parsers/index.js';
 import { norm, slug } from '../util/text.js';
@@ -214,7 +215,6 @@ export async function rotas(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ erro: `chave recusada pelo 2Captcha (${e instanceof Error ? e.message : e})` });
     }
   });
-  app.post('/api/importar-pasta', async () => importarPasta());
   app.post('/api/reprocessar', async () => ({ reenfileirados: await reprocessar() }));
 
   // ───────────── Amostras: CVs com elementos sem parser, para baixar e virar exemplo ─────────────
@@ -253,6 +253,25 @@ export async function rotas(app: FastifyInstance): Promise<void> {
   });
   app.post('/api/backup', async () => fazerBackup());
   app.post('/api/exportar', async () => exportarParquet());
+  app.get('/api/exportar/zip', async (_req, reply) => {
+    const zip = zipDaExportacao();
+    if (!zip) return reply.code(404).send({ erro: 'nenhuma exportação ainda: clique em Exportar agora' });
+    const dia = new Date().toLocaleDateString('sv-SE', { timeZone: config.tz });
+    return reply
+      .header('Content-Type', 'application/zip')
+      .header('Content-Disposition', `attachment; filename="lattes-devour-${dia}.zip"`)
+      .send(Buffer.from(zip));
+  });
+  // Recebe o .zip de outro Lattes Devour e acrescenta o que falta nesta base.
+  app.addContentTypeParser('application/zip', { parseAs: 'buffer' }, (_req, corpo, done) => done(null, corpo));
+  app.post('/api/importar', { bodyLimit: LIMITE_ZIP }, async (req, reply) => {
+    if (!Buffer.isBuffer(req.body)) return reply.code(400).send({ erro: 'envie o .zip com Content-Type application/zip' });
+    try {
+      return await importarBase(req.body);
+    } catch (e) {
+      return reply.code(400).send({ erro: e instanceof Error ? e.message : String(e) });
+    }
+  });
   // Zera o banco depois de uma cópia em Parquet; exige a senha do Postgres.
   app.post<{ Body: { senha?: string } }>('/api/db/limpar', async (req, reply) => {
     if (!senhaConfere(String(req.body?.senha ?? ''))) return reply.code(403).send({ erro: 'senha do banco incorreta' });

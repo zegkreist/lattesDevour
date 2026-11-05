@@ -160,6 +160,8 @@ d('ingest + busca (Postgres)', () => {
     expect((await pool.query(`SELECT uf FROM pesquisador WHERE id='5555555555555555'`)).rows[0].uf).toBeNull();
     const comEndereco = fs.readFileSync(new URL('./fixtures/cv-html-sintetico.html', import.meta.url), 'utf8')
       .replaceAll('Universidade Federal Fictícia', 'Instituto Novo').replaceAll('1234567890123456', '6666666666666666');
+    // O coletor grava o caminho do arquivo; sem arquivo (CV importado) não há o que reparsear.
+    await pool.query(`UPDATE fila SET html_path = '/data/html/5555.html' WHERE lattes_id LIKE '5555%'`);
     await ingest(parseHtmlCV(comEndereco), { ...HTML_PARSER, xmlSha256: 'h' });
     // O 5555 volta para a fila de parse para ganhar a UF.
     expect((await pool.query(`SELECT status FROM fila WHERE lattes_id='5555555555555555'`)).rows[0].status).toBe('html');
@@ -171,9 +173,10 @@ d('ingest + busca (Postgres)', () => {
     await pool.query(`INSERT INTO fila (lattes_id, status, prioridade) VALUES ('7000000000000001','pendente',0)`);
     await pool.query(`INSERT INTO fila (lattes_id, status, html_path) VALUES ('7000000000000002','parseado','/data/html/7000000000000002.html')`);
 
-    // Sem rede: comportamento antigo (fim da fila, só ganha nome).
-    await enfileirarVinculados([{ lattesId: '7000000000000003', nome: 'Sem Rede' }]);
-    expect(await fila('7000000000000003')).toMatchObject({ status: 'pendente', prioridade: PRIORIDADE.normal, rede: 0 });
+    // Sem rede (CV fora da rede pedida, inclusive o último nível dela): citados não entram na fila.
+    expect(await enfileirarVinculados([{ lattesId: '7000000000000003', nome: 'Sem Rede' }])).toBe(0);
+    expect(await enfileirarVinculados([{ lattesId: '7000000000000003', nome: 'Sem Rede' }], 0)).toBe(0);
+    expect(await fila('7000000000000003')).toBeUndefined();
 
     // Rede de 2 níveis: novo entra com prioridade e leva 1 nível; pendente sobe; já coletado volta ao parse para propagar.
     await enfileirarVinculados([
