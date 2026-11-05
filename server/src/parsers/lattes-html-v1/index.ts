@@ -48,10 +48,13 @@ const SECOES_MISTAS: [RegExp, string][] = [
 // Subtítulos que não são lista de obras.
 const SUBTITULOS_IGNORADOS = /^(citacoes|producao bibliografica|producao tecnica|producao artistica)/;
 
+// Formação e os blocos no mesmo formato: o Lattes separa ou junta pós-doutorado e livre-docência no título.
+const BLOCOS_DE_FORMACAO = ['formacao academica titulacao', 'pos doutorado', 'livre docencia', 'pos doutorado e livre docencia'];
+
 // Blocos h1 tratados; os demais conhecidos são ignorados de propósito (como DADOS-COMPLEMENTARES
 // no XML). Bloco fora das duas listas vai para "desconhecidos".
 const BLOCOS_TRATADOS = new Set([
-  'identificacao', 'endereco', 'formacao academica titulacao', 'pos doutorado', 'livre docencia', 'atuacao profissional',
+  'identificacao', 'endereco', ...BLOCOS_DE_FORMACAO, 'atuacao profissional',
   'areas de atuacao', 'producoes', 'eventos', 'orientacoes',
 ]);
 const BLOCOS_IGNORADOS = new Set([
@@ -59,6 +62,7 @@ const BLOCOS_IGNORADOS = new Set([
   'outros projetos', 'idiomas', 'premios e titulos', 'bancas', 'linhas de pesquisa', 'membro de corpo editorial',
   'revisor de periodico', 'revisor de projeto de fomento', 'membro de comite de assessoramento', 'outras informacoes relevantes', 'inovacao',
   'educacao e popularizacao de c t', 'patentes e registros',
+  'licenca maternidade paternidade e adocao', // dado pessoal, não acadêmico: não é lido (LGPD)
 ]);
 
 const ANO_RE = /\b(19[4-9]\d|20\d\d)\b/g;
@@ -456,7 +460,7 @@ export function parseHtmlCV(html: string): ParsedCV {
           pais: clean(local?.[3]),
         };
       }
-    } else if (['formacao academica titulacao', 'pos doutorado', 'livre docencia'].includes(ev.bloco) && ev.tipo === 'par') {
+    } else if (BLOCOS_DE_FORMACAO.includes(ev.bloco) && ev.tipo === 'par') {
       // Pós-doutorado e livre-docência vêm em blocos próprios, no mesmo formato (como no XML, são formação).
       const ls = linhas(ev.el);
       if (!ls[0]) continue;
@@ -469,7 +473,7 @@ export function parseHtmlCV(html: string): ParsedCV {
         curso: clean(semPonto(ls[0]).split(/ em (?:andamento em )?/)[1]),
         ...periodo(ev.rotulo ?? ''),
         ...(cab.includes('em andamento') ? { fim: null } : {}),
-        titulo: titulo ? clean(titulo.replace(/^Título:\s*/, '').replace(/,\s*Ano de Obten[çc][ãa]o:.*$/, '').replace(/\.$/, '')) : null,
+        titulo: titulo ? clean(titulo.replace(/^Título:\s*/, '').replace(/,\s*Ano de Obten[çc][ãa]o:.*$/i, '').replace(/\.$/, '')) : null,
         orientador: orientador ? clean(semPonto(orientador.replace(/^Orientador[^:]*:\s*/, ''))) : null,
       });
     } else if (ev.bloco === 'atuacao profissional' && ev.tipo === 'par') {

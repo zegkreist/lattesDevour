@@ -122,6 +122,28 @@ describe('parser lattes-html-v1', () => {
     ]);
   });
 
+  it('bloco único "Pós-doutorado e Livre-docência" vira formação, com o título limpo', () => {
+    const r = parseHtmlCV(html.replace('<h1 tabindex="0">Pós-doutorado</h1>', '<h1 tabindex="0">Pós-doutorado e Livre-docência</h1>'));
+    expect(r.desconhecidos).toEqual(['html:secao nova do lattes']);
+    expect(r.formacao.map((f) => f.nivel)).toEqual(cv.formacao.map((f) => f.nivel));
+    const livre = parseHtmlCV(html.replace('<h1 tabindex="0">Pós-doutorado</h1></a><hr class="separator"><div class="layout-cell layout-cell-12 data-cell">',
+      `<h1 tabindex="0">Pós-doutorado e Livre-docência</h1></a><hr class="separator"><div class="layout-cell layout-cell-12 data-cell">
+       <div class="layout-cell layout-cell-3 text-align-right"><div class="layout-cell-pad-5 text-align-right"><b>2024</b></div></div>
+       <div class="layout-cell layout-cell-9"><div class="layout-cell-pad-5">Livre-docência. <br class="clear">Universidade Fictícia, UF, Brasil. <br class="clear">Título: Tese de teste, Ano de obtenção: 2024.<br class="clear"></div></div>`));
+    expect(livre.formacao.find((f) => f.nivel === 'livre_docencia')).toMatchObject({ instituicao: 'Universidade Fictícia', titulo: 'Tese de teste', inicio: 2024, fim: 2024 });
+  });
+
+  it('licença maternidade/paternidade/adoção é ignorada: não é dado acadêmico', () => {
+    const bloco = `<div class="title-wrapper"><a name="Licencas"><h1 tabindex="0">Licença Maternidade, Paternidade e Adoção</h1></a><hr class="separator"><div class="layout-cell layout-cell-12 data-cell">
+      <div class="layout-cell layout-cell-3 text-align-right"><div class="layout-cell-pad-5 text-align-right"><b>01/02/2020 a 01/07/2020</b></div></div>
+      <div class="layout-cell layout-cell-9"><div class="layout-cell-pad-5">Duração: 150 dias</div></div></div></div>`;
+    const comBloco = html.replace('<div class="title-wrapper"><a name="SecaoNova">', `${bloco}<div class="title-wrapper"><a name="SecaoNova">`);
+    expect(comBloco).toContain('Licença Maternidade');
+    const r = parseHtmlCV(comBloco);
+    expect(r.desconhecidos).toEqual(['html:secao nova do lattes']);
+    expect(JSON.stringify(r)).not.toMatch(/150 dias|01\/02\/2020/);
+  });
+
   it('seção nova aparece em desconhecidos; as conhecidas não', () => {
     expect(cv.desconhecidos).toEqual(['html:secao nova do lattes']);
   });
