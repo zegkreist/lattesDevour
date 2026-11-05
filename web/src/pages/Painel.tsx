@@ -1,6 +1,7 @@
+import { AlertCircle, BookOpen, ChevronDown, ChevronRight, Download, GraduationCap, ListOrdered, RefreshCw, Users } from 'lucide-react';
 import { useState } from 'react';
 import { api, qs, usePoll } from '../api';
-import { Card, fmt, Kpi, when } from './ui';
+import { Aviso, Barras, Card, Carregando, fmt, Kpi, rotuloTipo, when } from './ui';
 
 export function Painel() {
   const { data: s, erro, reload } = usePoll<any>('/stats', 5000);
@@ -13,35 +14,39 @@ export function Painel() {
     api(`/desconhecidos/cvs${qs({ elemento: path })}`).then(setAmostras);
   };
   if (erro && !s) return <p className="err">{erro}</p>;
-  if (!s) return <p className="muted">Carregando…</p>;
+  if (!s) return <Carregando />;
   const f = s.fila;
   const total = Object.values<number>(f).reduce((a, b) => a + b, 0);
   const velhos = s.parsers.pesquisadoresPorVersao.filter((v: any) => v.versao < s.parsers.atual).reduce((a: number, v: any) => a + v.n, 0);
+  const comProblema = (f.erro ?? 0) + (f.sem_cv ?? 0);
+  const tipos = s.obrasPorTipo.slice(0, 10).map((t: any) => ({ rotulo: rotuloTipo(t.tipo), n: t.n }));
+  if (s.obrasPorTipo.length > 10) tipos.push({ rotulo: `Outros ${s.obrasPorTipo.length - 10} tipos`, n: s.obrasPorTipo.slice(10).reduce((n: number, t: any) => n + t.n, 0), resto: true });
   return (
     <div className="grid">
-      {f.aguardando_captcha > 0 && <div className="banner"><b>{f.aguardando_captcha} currículo(s) aguardando captcha.</b> Abra a aba Coleta para resolver.</div>}
+      {f.aguardando_captcha > 0 && <Aviso><b>{f.aguardando_captcha} currículo(s) aguardando captcha.</b> Abra a aba Coleta para resolver.</Aviso>}
       <div className="grid g4">
-        <Kpi n={s.totais.pesquisadores} l="pesquisadores" />
-        <Kpi n={s.totais.obras} l="obras" />
-        <Kpi n={s.totais.orientacoes} l="orientações" />
-        <Kpi n={f.pendente ?? 0} l={`na fila (de ${fmt(total)} IDs)`} />
-        <Kpi n={(f.erro ?? 0) + (f.sem_cv ?? 0)} l="com erro / sem CV" />
+        <Kpi n={s.totais.pesquisadores} l="Pesquisadores" Icone={Users} />
+        <Kpi n={s.totais.obras} l="Obras" Icone={BookOpen} />
+        <Kpi n={s.totais.orientacoes} l="Orientações" Icone={GraduationCap} />
+        <Kpi n={f.pendente ?? 0} l={`Na fila (de ${fmt(total)} IDs)`} Icone={ListOrdered} />
+        <Kpi n={comProblema} l="Com erro / sem CV" Icone={AlertCircle} alerta={comProblema > 0} />
       </div>
       <div className="grid g2">
-        <Card titulo="Parsers">
-          <p className="muted">{s.parsers.registrados.map((p: any) => `${p.id} v${p.versao}`).join(' · ')}</p>
-          {velhos > 0 && <p><button className="b" onClick={() => api('/reprocessar', { body: {} }).then(reload)}>{fmt(velhos)} CV(s) de parser antigo: reprocessar todos</button></p>}
-          <h2 style={{ marginTop: 12 }}>Elementos sem parser</h2>
+        <Card titulo="Obras por tipo"><Barras itens={tipos} /></Card>
+        <Card titulo="Pesquisadores por região">
+          {s.pesquisadoresPorRegiao.length === 0 ? <p className="muted">Nenhum ainda.</p> : <Barras itens={s.pesquisadoresPorRegiao.map((t: any) => ({ rotulo: t.regiao, n: t.n }))} />}
+        </Card>
+        <Card titulo="Elementos sem parser" desc={s.desconhecidos.length > 0 ? 'Clique para ver e baixar os CVs (amostras).' : undefined}>
           {s.desconhecidos.length === 0 ? <p className="muted">Nenhum.</p> : (
-            <table><tbody>{s.desconhecidos.map((d: any) => [
-              <tr key={d.path} onClick={() => abrir(d.path)} style={{ cursor: 'pointer' }} title="Ver os CVs com este elemento">
-                <td>{elemento === d.path ? '▾' : '▸'} <code>{d.path}</code></td><td className="num">{fmt(d.n)} CVs</td>
+            <div className="tw"><table><tbody>{s.desconhecidos.map((d: any) => [
+              <tr key={d.path} className="clicavel" onClick={() => abrir(d.path)} title="Ver os CVs com este elemento">
+                <td><div className="celula-lista">{elemento === d.path ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<code>{d.path}</code></div></td><td className="num">{fmt(d.n)} CVs</td>
               </tr>,
               elemento === d.path && (
                 <tr key={d.path + ':cvs'}><td colSpan={2}>
-                  {!amostras ? <span className="muted">Carregando…</span> : (
+                  {!amostras ? <Carregando /> : (
                     <>
-                      <p><a href={`/api/desconhecidos/zip${qs({ elemento: d.path })}`} download>Baixar todos (.zip)</a></p>
+                      <p style={{ margin: '4px 0 12px' }}><a className="b sec peq" href={`/api/desconhecidos/zip${qs({ elemento: d.path })}`} download style={{ textDecoration: 'none' }}><Download size={14} /> Baixar todos (.zip)</a></p>
                       <table><tbody>{amostras.map((c) => (
                         <tr key={c.id}>
                           <td>{c.nome ?? c.id}<br /><span className="muted">{c.id}</span></td>
@@ -55,22 +60,16 @@ export function Painel() {
                   )}
                 </td></tr>
               ),
-            ])}</tbody></table>
+            ])}</tbody></table></div>
           )}
-          {s.desconhecidos.length > 0 && <p className="muted">Clique para ver e baixar os CVs (amostras).</p>}
         </Card>
-        <Card titulo="Obras por tipo">
-          <table><tbody>
-            {s.obrasPorTipo.slice(0, 10).map((t: any) => <tr key={t.tipo}><td>{t.tipo.replaceAll('_', ' ')}</td><td className="num">{fmt(t.n)}</td></tr>)}
-            {s.obrasPorTipo.length > 10 && <tr><td className="muted">outros {s.obrasPorTipo.length - 10} tipos</td><td className="num muted">{fmt(s.obrasPorTipo.slice(10).reduce((n: number, t: any) => n + t.n, 0))}</td></tr>}
-          </tbody></table>
-        </Card>
-        <Card titulo="Pesquisadores por região">
-          <table><tbody>{s.pesquisadoresPorRegiao.map((t: any) => <tr key={t.regiao}><td>{t.regiao}</td><td className="num">{fmt(t.n)}</td></tr>)}</tbody></table>
+        <Card titulo="Parsers">
+          <div>{s.parsers.registrados.map((p: any) => <span className="tag" key={p.id}>{p.id} v{p.versao}</span>)}</div>
+          {velhos > 0 && <button className="b" onClick={() => api('/reprocessar', { body: {} }).then(reload)}><RefreshCw size={14} /> {fmt(velhos)} CV(s) de parser antigo: reprocessar todos</button>}
         </Card>
         {s.erros.length > 0 && (
           <Card titulo="Últimos erros">
-            <table><tbody>{s.erros.map((e: any) => <tr key={e.lattes_id + e.atualizado_em}><td>{e.lattes_id}</td><td className="err">{e.ultimo_erro}</td><td>{when(e.atualizado_em)}</td></tr>)}</tbody></table>
+            <div className="tw"><table><tbody>{s.erros.map((e: any) => <tr key={e.lattes_id + e.atualizado_em}><td>{e.lattes_id}</td><td className="err">{e.ultimo_erro}</td><td>{when(e.atualizado_em)}</td></tr>)}</tbody></table></div>
           </Card>
         )}
       </div>

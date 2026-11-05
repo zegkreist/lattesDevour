@@ -3,6 +3,7 @@
 // por frame), seleção que fixa o grupo, arrasto que reaquece a simulação.
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type Simulation } from 'd3-force';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { rotuloTipo } from './pages/ui';
 
 type Orientacoes = { pos_doutorado: number; doutorado: number; mestrado: number; outras: number };
 export interface GNode {
@@ -13,10 +14,20 @@ export interface GEdge { a: string; b: string; w: number; tipo?: string }
 interface N extends GNode { x: number; y: number; vx: number; vy: number; fx?: number | null; fy?: number | null; grau: number }
 interface E { a: number; b: number; w: number; tipo?: string }
 
-const PALETA = ['#1f6feb', '#d97706', '#059669', '#9333ea', '#dc2626', '#0891b2', '#65a30d', '#db2777', '#64748b'];
-export function corDoGrupo(grupo: string, grupos: string[]): string {
-  const i = grupos.indexOf(grupo);
-  return i < 0 ? '#94a3b8' : PALETA[i % PALETA.length];
+// Uma cor fixa por região: filtrar não repinta quem sobra. Paletas conferidas com o validador
+// do dataviz em todos os pares (claro sobre #fff, escuro sobre o card #17282b).
+const REGIOES = ['centro-oeste', 'nordeste', 'norte', 'sudeste', 'sul'];
+const CORES = {
+  claro: ['#2a6cb0', '#d9a21b', '#0e8f62', '#d9482b', '#b06fd8'],
+  escuro: ['#2f78d0', '#d6b861', '#12905f', '#e0502f', '#d9a0f0'],
+};
+const COR_OBRA = '#94a3b8';
+const COR_SEM_REGIAO = '#64748b';
+const ehEscuro = () => matchMedia('(prefers-color-scheme: dark)').matches;
+export function corDoGrupo(grupo: string, dark: boolean): string {
+  if (grupo === 'não coletado') return COR_OBRA;
+  const i = REGIOES.indexOf(grupo);
+  return i < 0 ? COR_SEM_REGIAO : CORES[dark ? 'escuro' : 'claro'][i];
 }
 const raio = (n: N) => (n.kind === 'obra' ? 3.5 : Math.min(4 + Math.sqrt(n.grau) * 1.8, 15));
 // Até onde a forma chega (o losango passa do raio): anéis, clique e colisão usam isto.
@@ -43,7 +54,7 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
   const simRef = useRef<Simulation<N, undefined> | null>(null);
   const drawRef = useRef<() => void>(() => {});
 
-  const grupos = useMemo(() => Array.from(new Set(nodes.map((n) => n.grupo))).sort(), [nodes]);
+  const grupos = useMemo(() => Array.from(new Set(nodes.filter((n) => n.kind !== 'obra').map((n) => n.grupo))).sort(), [nodes]);
   const g = useMemo(() => {
     const ns: N[] = nodes.map((n) => ({ ...n, x: (Math.random() - 0.5) * 500, y: (Math.random() - 0.5) * 500, vx: 0, vy: 0, grau: 0 }));
     const idx = new Map(ns.map((n, i) => [n.id, i]));
@@ -76,7 +87,8 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     ctx.scale(scale, scale);
     const foco = sel.current ?? hover.current;
     const hi = foco !== null ? vizinhos(foco) : null;
-    const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+    const dark = ehEscuro();
+    const tinta = dark ? '#f3f6f6' : '#0f2226';
     for (const e of g.es) {
       const dim = hi && !(hi.has(e.a) && hi.has(e.b));
       ctx.lineWidth = Math.min(1 + Math.log2(e.w + 1) * 0.6, 4) / scale;
@@ -87,24 +99,24 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     ctx.setLineDash([]);
     g.ns.forEach((n, i) => {
       ctx.globalAlpha = hi && !hi.has(i) ? 0.18 : 1;
-      ctx.fillStyle = n.kind === 'obra' ? '#94a3b8' : corDoGrupo(n.grupo, grupos);
+      ctx.fillStyle = n.kind === 'obra' ? COR_OBRA : corDoGrupo(n.grupo, dark);
       ctx.beginPath(); forma(ctx, n); ctx.fill();
       if (n.nivel === 0 && n.kind === 'pesquisador') {
-        ctx.strokeStyle = dark ? '#e6edf3' : '#1e293b'; ctx.lineWidth = 1.5 / scale;
+        ctx.strokeStyle = tinta; ctx.lineWidth = 1.5 / scale;
         ctx.beginPath(); ctx.arc(n.x, n.y, alcance(n) + 2 / scale, 0, Math.PI * 2); ctx.stroke();
       }
       if (i === sel.current) {
-        ctx.strokeStyle = dark ? '#e6edf3' : '#1e293b'; ctx.lineWidth = 2 / scale;
+        ctx.strokeStyle = tinta; ctx.lineWidth = 2 / scale;
         ctx.beginPath(); ctx.arc(n.x, n.y, alcance(n) + 3 / scale, 0, Math.PI * 2); ctx.stroke();
       }
       if (hi?.has(i) || (!hi && scale > 1.8 && n.kind === 'pesquisador')) {
-        ctx.globalAlpha = 1; ctx.fillStyle = dark ? '#e6edf3' : '#1e293b';
-        ctx.font = `${Math.max(10, 11 / scale)}px system-ui, sans-serif`;
+        ctx.globalAlpha = 1; ctx.fillStyle = tinta;
+        ctx.font = `${Math.max(10, 11 / scale)}px ui-sans-serif, system-ui, sans-serif`;
         ctx.fillText(n.label.length > 48 ? n.label.slice(0, 47) + '…' : n.label, n.x + alcance(n) + 3, n.y + 3);
       }
     });
     ctx.restore();
-  }, [g, grupos, vizinhos]);
+  }, [g, vizinhos]);
   drawRef.current = draw;
 
   useEffect(() => {
@@ -154,7 +166,7 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
     t.textContent = '';
     const b = document.createElement('b'); b.textContent = n.label; t.append(b);
     const d = document.createElement('div'); d.className = 'muted';
-    d.textContent = n.kind === 'obra' ? `${n.grupo}${n.ano ? ' · ' + n.ano : ''}` : [n.nivel === 0 ? 'resultado da busca' : n.nivel ? `nível ${n.nivel}` : '', n.instituicao, n.uf].filter(Boolean).join(' · ') || n.grupo;
+    d.textContent = n.kind === 'obra' ? `${rotuloTipo(n.grupo)}${n.ano ? ' · ' + n.ano : ''}` : [n.nivel === 0 ? 'resultado da busca' : n.nivel ? `nível ${n.nivel}` : '', n.instituicao, n.uf].filter(Boolean).join(' · ') || n.grupo;
     t.append(d);
     const o = n.orientacoes;
     if (o) {
@@ -200,12 +212,8 @@ export function Graph({ nodes, edges, onOpen }: { nodes: GNode[]; edges: GEdge[]
       <div className="legend">
         {nodes.some((n) => n.classe === 'orientador') && <><span><i className="forma" />pesquisador</span><span><i className="forma losango" />orientador</span></>}
         {edges.some((e) => e.tipo === 'orientacao') && <span><i className="tracejado" />orientação</span>}
-        {grupos.map((gr) => (
-          <span key={gr}>
-            <i style={{ background: nodes.find((n) => n.grupo === gr)?.kind === 'obra' ? '#94a3b8' : corDoGrupo(gr, grupos) }} />
-            {gr}
-          </span>
-        ))}
+        {grupos.map((gr) => <span key={gr}><i style={{ background: corDoGrupo(gr, ehEscuro()) }} />{gr}</span>)}
+        {nodes.some((n) => n.kind === 'obra') && <span><i className="quadrado" style={{ background: COR_OBRA }} />obra</span>}
       </div>
     </>
   );

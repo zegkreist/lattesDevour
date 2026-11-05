@@ -1,6 +1,7 @@
+import { ChevronRight, ExternalLink, Play, Plus, RotateCcw, Square, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, usePoll } from '../api';
-import { Card, fmt, when } from './ui';
+import { Aviso, Badge, Campo, Card, Carregando, faseDoColetor, fmt, StatusBadge, statusRotulo, when } from './ui';
 
 const RITMOS = [60, 120, 180, 300, 600];
 const CAMINHOS = [
@@ -16,28 +17,41 @@ const FASES: Record<string, string> = {
 
 export function Coleta() {
   const { data: c, reload } = usePoll<any>('/coletor', 2000);
-  if (!c) return <p className="muted">Carregando…</p>;
+  if (!c) return <Carregando />;
   const novnc = c.novncUrl || `${location.protocol}//${location.hostname}:6080/vnc.html?autoconnect=true&resize=scale`;
   const config = (body: object) => api('/coletor/config', { method: 'PUT', body }).then(reload);
   const ritmos = RITMOS.includes(c.config.porHora) ? RITMOS : [...RITMOS, c.config.porHora].sort((a, b) => a - b);
+  const fase = faseDoColetor(c);
   return (
     <div className="grid">
-      {c.fase === 'aguardando_captcha' && <div className="banner"><b>Captcha aguardando</b> ({c.atual}): resolva no <a href={novnc} target="_blank" rel="noreferrer">navegador do coletor</a>; o app segue sozinho.</div>}
-      {c.fase === 'pausado' && <div className="banner">{c.mensagem}</div>}
-      <Card>
-        <div className="row">
-          <b>Coletor</b>
-          <span className={c.fase === 'aguardando_captcha' ? 'st-aguardando_captcha' : 'muted'}>{c.rodando ? c.mensagem : 'parado'} · {fmt(c.baixadosNaSessao)} nesta sessão</span>
-          <button className="b" disabled={c.rodando} onClick={() => api('/coletor/iniciar', { body: {} }).then(reload)}>Iniciar</button>
-          <button className="b sec" disabled={!c.rodando} onClick={() => api('/coletor/parar', { body: {} }).then(reload)}>Parar</button>
-          <select value={c.config.caminho} onChange={(e) => config({ caminho: e.target.value })} title="Caminho de download (em teste)">
-            {CAMINHOS.map(([v, rotulo, dica]) => <option key={v} value={v} title={dica}>{rotulo} ({fmt(c.porCaminho?.[v] ?? 0)})</option>)}
-          </select>
-          <select value={c.config.porHora} onChange={(e) => config({ porHora: Number(e.target.value) })} title="Ritmo, contado de início a início">
-            {ritmos.map((n) => <option key={n} value={n}>{n} CVs/h (1 a cada {Math.round(3600 / n)} s)</option>)}
-          </select>
-          {c.config.caminho === 'cv' && <span className="muted">2Captcha: {c.captchaAuto ? 'ativo' : 'sem chave (Configurações)'}</span>}
-          <a href={novnc} target="_blank" rel="noreferrer">noVNC</a>
+      {c.fase === 'aguardando_captcha' && <Aviso><b>Captcha aguardando</b> ({c.atual}): resolva no <a href={novnc} target="_blank" rel="noreferrer">navegador do coletor</a>; o app segue sozinho.</Aviso>}
+      {c.fase === 'pausado' && <Aviso>{c.mensagem}</Aviso>}
+      <Card
+        titulo="Coletor"
+        desc={c.rodando ? c.mensagem : undefined}
+        acao={(
+          <div className="row">
+            <a className="b sec" href={novnc} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}><ExternalLink size={14} /> noVNC</a>
+            <button className="b sec" disabled={!c.rodando} onClick={() => api('/coletor/parar', { body: {} }).then(reload)}><Square size={14} /> Parar</button>
+            <button className="b" disabled={c.rodando} onClick={() => api('/coletor/iniciar', { body: {} }).then(reload)}><Play size={14} /> Iniciar</button>
+          </div>
+        )}
+      >
+        <div className="campos" style={{ alignItems: 'start' }}>
+          <div className="campo"><span>Estado</span><div className="valor"><Badge tom={fase.tom}>{fase.rotulo}</Badge><span className="muted">{fmt(c.baixadosNaSessao)} nesta sessão</span></div></div>
+          <Campo rotulo="Caminho de download" title="Caminho de download (em teste)">
+            <select value={c.config.caminho} onChange={(e) => config({ caminho: e.target.value })}>
+              {CAMINHOS.map(([v, rotulo, dica]) => <option key={v} value={v} title={dica}>{rotulo} ({fmt(c.porCaminho?.[v] ?? 0)})</option>)}
+            </select>
+          </Campo>
+          <Campo rotulo="Ritmo" title="Ritmo, contado de início a início">
+            <select value={c.config.porHora} onChange={(e) => config({ porHora: Number(e.target.value) })}>
+              {ritmos.map((n) => <option key={n} value={n}>{n} CVs/h (1 a cada {Math.round(3600 / n)} s)</option>)}
+            </select>
+          </Campo>
+          {c.config.caminho === 'cv' && (
+            <div className="campo"><span>2Captcha</span><div className="valor">{c.captchaAuto ? <Badge tom="ok">ativo</Badge> : <Badge tom="neutro" title="Defina a chave em Configurações">sem chave</Badge>}</div></div>
+          )}
         </div>
       </Card>
       <AdicionarCVs />
@@ -81,18 +95,18 @@ function AdicionarCVs() {
   const porId = new Map<string, any>((st?.itens ?? []).map((i: any) => [i.id, i]));
   const prontos = pedidos.filter((p) => porId.get(p.id)?.status === 'parseado').length;
   return (
-    <Card titulo="Adicionar CVs">
-      <textarea style={{ minHeight: 64 }} value={texto} onChange={(e) => setTexto(e.target.value)}
+    <Card titulo="Adicionar CVs" desc="Rede = orientador, orientados e coautores que aparecem no CV com link do Lattes. CV já coletado não é baixado de novo.">
+      <textarea value={texto} onChange={(e) => setTexto(e.target.value)}
         placeholder="links (lattes.cnpq.br/…) ou IDs de 16 dígitos, um ou vários" />
       <div className="row">
-        <select value={destino} onChange={(e) => setDestino(e.target.value)}>
-          <option value="topo">topo da fila</option>
-          <option value="rede1">topo + rede (1 nível)</option>
-          <option value="rede2">topo + rede (2 níveis)</option>
-          <option value="fim">fim da fila (lista grande)</option>
+        <select value={destino} onChange={(e) => setDestino(e.target.value)} aria-label="Onde entra na fila">
+          <option value="topo">Topo da fila</option>
+          <option value="rede1">Topo + rede (1 nível)</option>
+          <option value="rede2">Topo + rede (2 níveis)</option>
+          <option value="fim">Fim da fila (lista grande)</option>
         </select>
-        <button className="b" disabled={!texto.trim()} onClick={() => enviar(texto)}>Adicionar</button>
-        <span className="muted" title="Rede: quem aparece no CV com link do Lattes (orientador, orientados, coautores). CV já coletado não é baixado de novo.">{msg || 'rede = orientador, orientados e coautores com Lattes'}</span>
+        <button className="b" disabled={!texto.trim()} onClick={() => enviar(texto)}><Plus size={14} /> Adicionar</button>
+        {msg && <span className="muted">{msg}</span>}
       </div>
       {pedidos.length > 0 && st && (
         <>
@@ -101,21 +115,23 @@ function AdicionarCVs() {
             {st.redeNaFila > 0 && <> · rede: {fmt(st.redeNaFila)} na frente da fila</>}
             {!st.coletorRodando && pedidos.some((p) => porId.get(p.id)?.status === 'pendente') && <> · <b>coletor parado</b></>}
           </p>
-          <table><tbody>{pedidos.map((p) => {
+          <div className="tw"><table><tbody>{pedidos.map((p) => {
             const i = porId.get(p.id) ?? {};
             return (
               <tr key={p.id}>
                 <td><code>{p.id}</code> <span className="muted">{i.nome ?? i.nomeHint ?? ''}</span></td>
                 <td>
-                  {i.status === 'parseado' ? <span className="st-parseado">{p.acao === 'enfileirado' ? 'pronto' : 'já coletado'} · {fmt(i.obras ?? 0)} obras</span>
-                    : i.status === 'pendente' ? <>posição {fmt(i.posicao)}</>
-                    : FASES[i.status] ? <span className="st-aguardando_captcha">{FASES[i.status]}</span>
-                    : <span className="err">{i.status ?? '?'}{i.ultimoErro ? `: ${i.ultimoErro}` : ''}</span>}
-                  {p.acao === 'ja_coletado' && i.status === 'parseado' && <> <button className="b sec" onClick={() => enviar(p.id, true)}>coletar de novo</button></>}
+                  <div className="row">
+                    {i.status === 'parseado' ? <Badge tom="ok">{p.acao === 'enfileirado' ? 'pronto' : 'já coletado'} · {fmt(i.obras ?? 0)} obras</Badge>
+                      : i.status === 'pendente' ? <Badge tom="neutro">posição {fmt(i.posicao)}</Badge>
+                      : FASES[i.status] ? <Badge tom={i.status === 'aguardando_captcha' ? 'warn' : 'info'}>{FASES[i.status]}</Badge>
+                      : <span className="err">{i.status ?? '?'}{i.ultimoErro ? `: ${i.ultimoErro}` : ''}</span>}
+                    {p.acao === 'ja_coletado' && i.status === 'parseado' && <button className="b sec peq" onClick={() => enviar(p.id, true)}>Coletar de novo</button>}
+                  </div>
                 </td>
               </tr>
             );
-          })}</tbody></table>
+          })}</tbody></table></div>
         </>
       )}
     </Card>
@@ -127,36 +143,42 @@ function Fila() {
   const [status, setStatus] = useState('');
   const [msg, setMsg] = useState('');
   const { data: fila } = usePoll<any[]>(`/fila?limit=15${status ? `&status=${status}` : ''}`, 5000);
-  const resumo = Object.entries(stats?.fila ?? {}).map(([k, v]) => `${k} ${fmt(v as number)}`).join(' · ');
   const comErro = (fila ?? []).some((f) => f.ultimo_erro);
   return (
     <details className="card">
-      <summary><b>Fila</b> <span className="muted">{resumo}</span></summary>
-      <div className="row" style={{ marginTop: 10 }}>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">todos</option>{['pendente', 'baixando', 'aguardando_captcha', 'html', 'baixado', 'parseado', 'erro', 'sem_cv'].map((s) => <option key={s}>{s}</option>)}
-        </select>
-        <button className="b sec" onClick={() => api('/fila/retry-erros', { body: {} }).then((r) => setMsg(`${r.reenfileirados} para baixar · ${r.reprocessados} só reprocessar (já em disco)`))}>Reenfileirar erros</button>
-        <button className="b sec" onClick={async () => {
-          const n = stats?.fila?.pendente ?? 0;
-          if (!n || !confirm(`Remover ${fmt(n)} CV(s) pendente(s) da fila? Quem já foi baixado ou está baixando não é afetado.`)) return;
-          const r = await api('/fila?status=pendente', { method: 'DELETE' });
-          setMsg(`${fmt(r.removidos)} pendente(s) removido(s)`);
-        }}>Limpar pendentes</button>
-        <button className="b sec" onClick={async () => {
-          const n = (stats?.fila?.erro ?? 0) + (stats?.fila?.sem_cv ?? 0);
-          if (!n || !confirm(`Remover ${fmt(n)} CV(s) com erro/sem CV da fila?`)) return;
-          const r = await Promise.all([api('/fila?status=erro', { method: 'DELETE' }), api('/fila?status=sem_cv', { method: 'DELETE' })]);
-          setMsg(`${fmt(r[0].removidos + r[1].removidos)} com erro removido(s)`);
-        }}>Limpar erros</button>
-        <span className="muted">{msg}</span>
+      <summary>
+        <ChevronRight className="seta" size={16} /><b>Fila</b>
+        {Object.entries(stats?.fila ?? {}).map(([k, v]) => <StatusBadge key={k} status={k} n={v as number} />)}
+      </summary>
+      <div className="card-body">
+        <div className="row">
+          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filtrar por status">
+            <option value="">Todos os status</option>{['pendente', 'baixando', 'aguardando_captcha', 'html', 'baixado', 'parseado', 'erro', 'sem_cv'].map((s) => <option key={s} value={s}>{statusRotulo(s)}</option>)}
+          </select>
+          <button className="b sec" onClick={() => api('/fila/retry-erros', { body: {} }).then((r) => setMsg(`${r.reenfileirados} para baixar · ${r.reprocessados} só reprocessar (já em disco)`))}><RotateCcw size={14} /> Reenfileirar erros</button>
+          <button className="b sec" onClick={async () => {
+            const n = stats?.fila?.pendente ?? 0;
+            if (!n || !confirm(`Remover ${fmt(n)} CV(s) pendente(s) da fila? Quem já foi baixado ou está baixando não é afetado.`)) return;
+            const r = await api('/fila?status=pendente', { method: 'DELETE' });
+            setMsg(`${fmt(r.removidos)} pendente(s) removido(s)`);
+          }}><Trash2 size={14} /> Limpar pendentes</button>
+          <button className="b sec" onClick={async () => {
+            const n = (stats?.fila?.erro ?? 0) + (stats?.fila?.sem_cv ?? 0);
+            if (!n || !confirm(`Remover ${fmt(n)} CV(s) com erro/sem CV da fila?`)) return;
+            const r = await Promise.all([api('/fila?status=erro', { method: 'DELETE' }), api('/fila?status=sem_cv', { method: 'DELETE' })]);
+            setMsg(`${fmt(r[0].removidos + r[1].removidos)} com erro removido(s)`);
+          }}><Trash2 size={14} /> Limpar erros</button>
+          {msg && <span className="muted">{msg}</span>}
+        </div>
+        <div className="tw">
+          <table><thead><tr><th>ID</th><th>Status</th><th>Nome</th><th>Origem</th>{comErro && <th>Erro</th>}<th>Atualizado</th></tr></thead><tbody>
+            {(fila ?? []).map((f) => (
+              <tr key={f.lattes_id}><td>{f.lattes_id}</td><td><StatusBadge status={f.status} /></td><td>{f.nome_hint}</td><td>{f.origem}</td>
+                {comErro && <td className="err">{f.ultimo_erro}</td>}<td className="quebra-nao">{when(f.atualizado_em)}</td></tr>
+            ))}
+          </tbody></table>
+        </div>
       </div>
-      <table><thead><tr><th>ID</th><th>Status</th><th>Nome</th><th>Origem</th>{comErro && <th>Erro</th>}<th>Atualizado</th></tr></thead><tbody>
-        {(fila ?? []).map((f) => (
-          <tr key={f.lattes_id}><td>{f.lattes_id}</td><td className={`st-${f.status}`}>{f.status}</td><td>{f.nome_hint}</td><td>{f.origem}</td>
-            {comErro && <td className="err">{f.ultimo_erro}</td>}<td>{when(f.atualizado_em)}</td></tr>
-        ))}
-      </tbody></table>
     </details>
   );
 }
